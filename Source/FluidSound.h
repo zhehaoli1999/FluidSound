@@ -26,12 +26,14 @@ class Solver
 public:
     /**
      * \brief Constructor: reads Bubble data from file and initializes Oscillators
-     * \param[in]  bubFile  path to bubble tracking file
-     * \param[in]  dt       timestep size
-     * \param[in]  scheme   coupling scheme (0 - uncoupled, 1 - coupled)
-     * \param[in]  ts       simulation start time (default 0.)
+     * \param[in]  bubFile      path to full bubble tracking file (complete merge/split graph)
+     * \param[in]  filteredFile optional path to filtered file; if non-empty, only bubbles in this
+     *                          file contribute to output (others still participate in coupling)
+     * \param[in]  dt           timestep size
+     * \param[in]  scheme       coupling scheme (0 - uncoupled, 1 - coupled)
+     * \param[in]  ts           simulation start time (default 0.)
      */
-    Solver(const std::string& bubFile, double dt, int scheme, double ts = 0.);
+    Solver(const std::string& bubFile, const std::string& filteredFile, double dt, int scheme, double ts = 0.);
 
     /** \brief Timesteps Oscillator vibrations */
     T step();
@@ -70,6 +72,8 @@ private:
 
     std::vector<double> _eventTimes;    //!< vector of sorted event times (i.e., when to refactor the mass matrix)
     int _evID = 0;  //!< current _eventTimes index
+
+    std::set<int> _contributingBubIDs;   //!< if non-empty, only oscillators with bubIDs in this set contribute to output
 
     /**
      * \private Given bubble data, chains Bubbles together to form Oscillators

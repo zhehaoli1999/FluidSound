@@ -5,21 +5,62 @@
  */
 
 #include "FluidSound.h"
+#include "BubbleUtils.h"
+
+#include <iomanip>
 
 namespace FluidSound {
 
 /** */
 template <typename T>
-Solver<T>::Solver(const std::string &bubFile, double dt, int scheme, double ts) : _dt(dt), _ts(ts)
+Solver<T>::Solver(const std::string &bubFile, const std::string &filteredFile, double dt, int scheme, double ts) : _dt(dt), _ts(ts)
 {
     std::map<int, Bubble<T>> allBubbles;
 
     std::cout << "Reading bubble data from \"" << bubFile << "\"" << std::endl;
     BubbleUtils<T>::loadBubbleFile(allBubbles, bubFile);
+
+    if (!filteredFile.empty())
+    {
+        std::cout << "Reading contributing bubble IDs from \"" << filteredFile << "\"" << std::endl;
+        _contributingBubIDs = parseBubbleIDsFromFile(filteredFile);
+        size_t totalBubbles = allBubbles.size();
+        size_t contributing = _contributingBubIDs.size();
+        size_t filteredOut = (contributing <= totalBubbles) ? (totalBubbles - contributing) : 0;
+        double pctFiltered = (totalBubbles > 0) ? (100.0 * filteredOut / totalBubbles) : 0.0;
+        std::cout << "  " << contributing << " bubbles contribute, " << filteredOut
+                  << " filtered out (" << std::fixed << std::setprecision(1) << pctFiltered << "%)" << std::endl;
+    }
      
     _makeOscillators(allBubbles);
     std::cout << "Total number of oscillators = " << _oscillators.size() << std::endl;
-    
+
+    if (!_contributingBubIDs.empty())
+    {
+        size_t contributingOsc = 0;
+        for (const auto& osc : _oscillators)
+        {
+            for (int bid : osc.bubIDs)
+            {
+                if (_contributingBubIDs.count(bid))
+                {
+                    contributingOsc++;
+                    break;
+                }
+            }
+        }
+        size_t totalOsc = _oscillators.size();
+        size_t filteredOsc = totalOsc - contributingOsc;
+        double pctFilteredOsc = (totalOsc > 0) ? (100.0 * filteredOsc / totalOsc) : 0.0;
+        std::cout << "  " << contributingOsc << " oscillators contribute, " << filteredOsc
+                  << " oscillators filtered out (" << std::fixed << std::setprecision(1) << pctFilteredOsc << "%)" << std::endl;
+    }
+
+    if (_eventTimes.empty())
+    {
+        throw std::runtime_error("No oscillators created (all bubbles filtered out). Check: solve data, frequency < 18 kHz, duration > 3 periods.");
+    }
+
     switch (scheme)
     {
         case 1: _integrator = new Coupled_Direct<T>(dt); break;
@@ -101,6 +142,7 @@ T Solver<T>::step()
     _integrator->step(time);
 
     // Unpack _integrator->States() to update Oscillator states accordingly
+    // If _contributingBubIDs is set, only add accel from oscillators whose bubIDs are in that set
     T total_response = 0.0;
     for (int i = 0; i < N_total; i++)
     {
@@ -108,7 +150,21 @@ T Solver<T>::step()
         total_osc[i]->state(1) = _integrator->States()(i + N_total);
 
         total_osc[i]->accel = _integrator->Derivs()(i + N_total);
-        total_response += total_osc[i]->accel;
+        if (_contributingBubIDs.empty())
+        {
+            total_response += total_osc[i]->accel;
+        }
+        else
+        {
+            for (int bid : total_osc[i]->bubIDs)
+            {
+                if (_contributingBubIDs.count(bid))
+                {
+                    total_response += total_osc[i]->accel;
+                    break;
+                }
+            }
+        }
     }
     if (std::abs(total_response) > 100.) { throw std::runtime_error("Instability detected!"); }
 

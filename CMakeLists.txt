@@ -17,4 +17,8 @@ target_link_libraries(${PROJECT_NAME} PRIVATE Eigen3::Eigen)
 if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
 	add_executable(runFluidSound main.cpp)
 	target_link_libraries(runFluidSound FluidSound Eigen3::Eigen)
+
+	# Tool to compute amplitude and damping from trackedBubInfo.txt
+	add_executable(compute_bubble_amplitude_damping compute_bubble_amplitude_damping.cpp)
+	target_link_libraries(compute_bubble_amplitude_damping FluidSound Eigen3::Eigen)
 endif ()

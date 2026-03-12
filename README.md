@@ -20,7 +20,15 @@ Building is handled by CMake. For example, to build from source on Mac & Linux:
 We provide an example scene in Scenes/GlassPour/. To run the code:
 
     ./runFluidSound ../Scenes/GlassPour/trackedBubInfo.txt 48000 1
-    python ../scripts/write_wav.py output.txt 48000 
+    python ../scripts/write_wav.py output.txt 48000
+
+With importance filtering (full graph + filtered subset for output):
+
+    ./runFluidSound <full_bub_file> <filtered_bub_file> 48000 1 -o output_filtered.txt
+
+Optional `-o`/`--output` sets the waveform output file (default: output.txt).
+
+The full file provides the complete merge/split graph; the filtered file lists which bubbles contribute to the final sound. Bubbles not in the filtered set still participate in coupling but their contribution is excluded from the output. 
 
 (where the 1 indicates the scheme: 0 - uncoupled, 1 - coupled). Afterwards, the simulated audio will be written to 'output.wav'. More scenes are available [here](https://graphics.stanford.edu/papers/waveblender/dataset/index.html).
 

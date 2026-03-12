@@ -14,12 +14,21 @@
 #include <fstream>
 #include <sstream>
 #include <iostream>
+#include <stdexcept>
 
 #include <vector>
 #include <map>
+#include <set>
 
 
 namespace FluidSound {
+
+/**
+ * \brief Parse bubble IDs from a filtered bubble file (same format as trackedBubInfo).
+ * Used when runFluidSound takes both full and filtered files: full graph from one,
+ * contributing IDs from the other.
+ */
+std::set<int> parseBubbleIDsFromFile(const std::string& bubFile);
 
 /** */
 enum EventType { ENTRAIN, MERGE, SPLIT, COLLAPSE };
@@ -50,6 +59,7 @@ struct Bubble
     // solve data (NOTE: does not include Bubble start and end times)
     std::vector<double> solveTimes;
     std::vector<T> w0, x, y, z;
+    std::vector<T> pressure;  // optional pressure per sample (default 101450 if not in file)
 
     bool hasSolveData() const { return !solveTimes.empty(); }
 };
