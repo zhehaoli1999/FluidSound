@@ -7,6 +7,11 @@
  *
  * Output format: same as input, with weight, cutoff, and damping appended per data line:
  *   time freqHz x y z [pressure] weight cutoff damping
+ *
+ * Optional modes for frequency experiment (full vs frozen vs Minnaert):
+ *   --frozen-freq <path>   Write trackedBubInfo with first (initial) frequency per bubble
+ *   --minnaert-freq <path> Write trackedBubInfo with Minnaert frequency (3.26/r Hz) per bubble
+ *   These output original format (time freq x y z pressure) for runFluidSound.
  */
 
 #include <algorithm>
@@ -170,13 +175,96 @@ static void processAndWrite(const std::string& outPath,
     }
 }
 
+/** Minnaert frequency: f = 3.26 / r (Hz), r in meters */
+static const double MINNAERT_COEFF = 3.283243423687599;
+
+/** Write trackedBubInfo in original format (time freq x y z pressure) with modified frequencies.
+ *  freqMode: "frozen" = first frequency per bubble, "minnaert" = 3.26/radius per bubble */
+static void writeTrackedBubInfoFreqVariant(const std::string& outPath,
+    const std::map<int, FluidSound::Bubble<double>>& bubMap,
+    const std::string& freqMode)
+{
+    std::ofstream out(outPath);
+    if (!out) throw std::runtime_error("Cannot open output file: " + outPath);
+
+    std::vector<int> sortedIDs;
+    for (const auto& pair : bubMap) sortedIDs.push_back(pair.first);
+    std::sort(sortedIDs.begin(), sortedIDs.end(), [&bubMap](int a, int b) {
+        double ta = bubMap.at(a).solveTimes.empty() ? bubMap.at(a).startTime : bubMap.at(a).solveTimes.front();
+        double tb = bubMap.at(b).solveTimes.empty() ? bubMap.at(b).startTime : bubMap.at(b).solveTimes.front();
+        return ta < tb;
+    });
+
+    for (int bubID : sortedIDs)
+    {
+        const FluidSound::Bubble<double>& bub = bubMap.at(bubID);
+        double frozenFreqHz;
+        if (freqMode == "frozen")
+        {
+            if (bub.w0.empty()) continue;
+            frozenFreqHz = bub.w0[0] / (2. * M_PI);
+        }
+        else if (freqMode == "minnaert")
+        {
+            frozenFreqHz = MINNAERT_COEFF / bub.radius;
+        }
+        else
+        {
+            throw std::runtime_error("Unknown freqMode: " + freqMode);
+        }
+
+        out << "Bub " << bub.bubID << " " << bub.radius << "\n";
+        out << "  Start: ";
+        switch (bub.startType)
+        {
+            case FluidSound::EventType::ENTRAIN: out << "N"; break;
+            case FluidSound::EventType::MERGE:   out << "M"; break;
+            case FluidSound::EventType::SPLIT:   out << "S"; break;
+        }
+        out << " " << bub.startTime;
+        for (int id : bub.prevBubIDs) out << " " << id;
+        out << "\n";
+
+        for (size_t i = 0; i < bub.solveTimes.size(); i++)
+        {
+            out << "  " << bub.solveTimes[i] << " " << frozenFreqHz << " " << bub.x[i] << " "
+                << bub.y[i] << " " << bub.z[i] << " " << bub.pressure[i] << "\n";
+        }
+
+        out << "  End: ";
+        switch (bub.endType)
+        {
+            case FluidSound::EventType::MERGE:   out << "M"; break;
+            case FluidSound::EventType::SPLIT:   out << "S"; break;
+            case FluidSound::EventType::COLLAPSE: out << "C"; break;
+        }
+        out << " " << bub.endTime;
+        for (int id : bub.nextBubIDs) out << " " << id;
+        out << "\n";
+    }
+}
+
 int main(int argc, char* argv[])
 {
     std::string inFile = "trackedBubInfo.txt";
     std::string outFile = "trackedBubInfo_with_amplitude_damping.txt";
+    std::string frozenFreqOut;
+    std::string minnaertFreqOut;
 
-    if (argc > 1) inFile = argv[1];
-    if (argc > 2) outFile = argv[2];
+    for (int i = 1; i < argc; i++)
+    {
+        std::string arg = argv[i];
+        if (arg == "--frozen-freq" && i + 1 < argc)
+        {
+            frozenFreqOut = argv[++i];
+        }
+        else if (arg == "--minnaert-freq" && i + 1 < argc)
+        {
+            minnaertFreqOut = argv[++i];
+        }
+        else if (i == 1) inFile = arg;
+        else if (i == 2) outFile = arg;
+    }
 
     std::cout << "Reading " << inFile << "..." << std::endl;
     std::map<int, FluidSound::Bubble<double>> bubMap;
@@ -194,8 +282,21 @@ int main(int argc, char* argv[])
     }
     if (tMin > tMax) { tMin = 0.; tMax = 1.; }
     std::cout << "Simulation time range: " << tMin << " - " << tMax << " s" << std::endl;
-    std::cout << "Computing amplitude and damping, writing to " << outFile << "..." << std::endl;
 
+    if (!frozenFreqOut.empty())
+    {
+        std::cout << "Writing frozen-frequency variant to " << frozenFreqOut << "..." << std::endl;
+        writeTrackedBubInfoFreqVariant(frozenFreqOut, bubMap, "frozen");
+        std::cout << "Done (frozen freq)." << std::endl;
+    }
+    if (!minnaertFreqOut.empty())
+    {
+        std::cout << "Writing Minnaert-frequency variant to " << minnaertFreqOut << "..." << std::endl;
+        writeTrackedBubInfoFreqVariant(minnaertFreqOut, bubMap, "minnaert");
+        std::cout << "Done (Minnaert freq)." << std::endl;
+    }
+
+    std::cout << "Computing amplitude and damping, writing to " << outFile << "..." << std::endl;
     processAndWrite(outFile, bubMap, tMin, tMax);
     std::cerr << "\r  [100.0%] t=" << tMax << "s / " << tMax << "s    " << std::endl;
     std::cout << "Done." << std::endl;

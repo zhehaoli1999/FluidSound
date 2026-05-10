@@ -59,7 +59,7 @@ struct Bubble
     // solve data (NOTE: does not include Bubble start and end times)
     std::vector<double> solveTimes;
     std::vector<T> w0, x, y, z;
-    std::vector<T> pressure;  // optional pressure per sample (default 101450 if not in file)
+    std::vector<T> pressure;  // optional pressure per sample (default 101325 if not in file)
 
     bool hasSolveData() const { return !solveTimes.empty(); }
 };

@@ -18,7 +18,7 @@ void BubbleUtils<T>::_parseBubble(std::pair<int, Bubble<T>> &bubPair, std::ifstr
 
     int bubID; double time;
     T freqHz, x, y, z;
-    T pressure = 101450.;  // if pressure not specified, assume default value of 101450 Pa
+    T pressure = 101325.;  // if pressure not specified, assume default value of 101325 Pa
 
     // Line 1: 'Bub <unique bubble ID> <radius>'
     std::getline(in, line);
@@ -55,7 +55,7 @@ void BubbleUtils<T>::_parseBubble(std::pair<int, Bubble<T>> &bubPair, std::ifstr
     std::getline(in, line);
     while (line[2] != 'E' && line[2] != 'B' && !in.eof())
     {
-        pressure = 101450.;  // default if not in line
+        pressure = 101325.;  // default if not in line
         is = std::istringstream(line);
         is >> time >> freqHz >> x >> y >> z >> pressure;
         std::getline(in, line);
