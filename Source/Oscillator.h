@@ -88,8 +88,12 @@ struct Oscillator
      */
     static std::pair<T, T> MergeForcing(T radius, T r1, T r2, T maxCutoff = T(0.0006));
     
-    /** \brief Damping via radiative, viscous, and thermal effects */
-    static T calcBeta(T radius, T w0);
+    /** \brief Damping via radiative, viscous, and thermal effects.
+     *  \param[in]  coeff   multiplier on the returned beta (default 1, the
+     *                      original Czerski/Deane value). Use coeff < 1 to
+     *                      lengthen ringdown, coeff > 1 to shorten it.
+     */
+    static T calcBeta(T radius, T w0, T coeff = T(1));
     
 private:
     int _idx = 0;

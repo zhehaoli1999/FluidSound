@@ -38,12 +38,17 @@ public:
      *                                  integrator's event-time set so that K=w0^2 is sampled at every
      *                                  trackedBubInfo row (instead of being a linear ramp between each
      *                                  oscillator's start and end time, which is the default).
+     * \param[in]  dampingCoeff         multiplier on the per-sample beta computed by Oscillator::calcBeta.
+     *                                  Default 1.0 (original Czerski/Deane radiative+viscous+thermal model);
+     *                                  values < 1 lengthen ringdown (longer audible ring), values > 1
+     *                                  shorten it.
      */
     Solver(const std::string& bubFile, const std::string& filteredFile, double dt, int scheme, double ts = 0.,
         double timeJitterHalfWidth = 0., unsigned long long timeJitterSeed = 0ULL,
         double transientPeriods = 0., double transientGain = 1., double forcingCutoff = 0.0006,
         ForcingEnvelope forcingEnvelope = ForcingEnvelope::HARD,
-        bool denseEvents = false);
+        bool denseEvents = false,
+        double dampingCoeff = 1.0);
 
     /** \brief Timesteps Oscillator vibrations */
     T step();
@@ -90,7 +95,7 @@ private:
      * \param[in]  bubMap  map from Bubble IDs to Bubble objects
      */
     void _makeOscillators(const std::map<int, Bubble<T>>& bubMap, double timeJitterHalfWidth, unsigned long long timeJitterSeed,
-        double transientPeriods, double transientGain, double forcingCutoff, bool denseEvents);
+        double transientPeriods, double transientGain, double forcingCutoff, bool denseEvents, double dampingCoeff);
 };
 
 } // namespace FluidSound

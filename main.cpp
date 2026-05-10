@@ -23,7 +23,7 @@ void Run(const std::string& bubFile, const std::string& filteredFile, const std:
     double maxTime = 0., double timeJitterHalfWidth = 0., unsigned long long timeJitterSeed = 0ULL,
     double transientPeriods = 0., double transientGain = 1., double forcingCutoff = 0.0006,
     FluidSound::ForcingEnvelope forcingEnvelope = FluidSound::ForcingEnvelope::SMOOTHSTEP,
-    bool denseEvents = false)
+    bool denseEvents = false, double dampingCoeff = 1.0)
 {
     std::cout << "runFluidSound: bubFile=\"" << bubFile << "\"";
     if (!filteredFile.empty())
@@ -38,6 +38,7 @@ void Run(const std::string& bubFile, const std::string& filteredFile, const std:
     std::cout << " forcing_cutoff=" << forcingCutoff;
     std::cout << " forcing_envelope=" << (forcingEnvelope == FluidSound::ForcingEnvelope::SMOOTHSTEP ? "smoothstep" : "hard");
     std::cout << " dense_events=" << (denseEvents ? "on" : "off");
+    std::cout << " damping_coeff=" << dampingCoeff;
     std::cout << std::endl;
 
     // Check input file exists
@@ -63,7 +64,7 @@ void Run(const std::string& bubFile, const std::string& filteredFile, const std:
     std::cout << "Creating solver..." << std::endl;
     double dt = 1. / srate;
     FluidSound::Solver<precision> solver(bubFile, filteredFile, dt, scheme, 0., timeJitterHalfWidth, timeJitterSeed,
-        transientPeriods, transientGain, forcingCutoff, forcingEnvelope, denseEvents);
+        transientPeriods, transientGain, forcingCutoff, forcingEnvelope, denseEvents, dampingCoeff);
 
     const auto& evTimes = solver.eventTimes();
     if (evTimes.empty())
@@ -123,6 +124,9 @@ int main(int argc, char* argv[])
         //                   event-time set so K=w0^2 is sampled at every trackedBubInfo
         //                   row (instead of a linear ramp between only the first and
         //                   last solve column over each oscillator's lifetime). Default off.
+        //   --damping-coeff C: multiplier on the per-sample beta computed by
+        //                   Oscillator::calcBeta. Default 1.0 (Czerski/Deane). Use C<1
+        //                   to lengthen ringdown (longer audible ring), C>1 to shorten it.
         std::string bubFile("../Scenes/GlassPour/trackedBubInfo.txt");
         std::string filteredFile;
         std::string outputFile("output.txt");
@@ -136,6 +140,7 @@ int main(int argc, char* argv[])
         double forcingCutoff = 0.0006;
         FluidSound::ForcingEnvelope forcingEnvelope = FluidSound::ForcingEnvelope::SMOOTHSTEP;
         bool denseEvents = false;
+        double dampingCoeff = 1.0;
 
         std::vector<std::string> posArgs;
         for (int i = 1; i < argc; i++)
@@ -187,6 +192,10 @@ int main(int argc, char* argv[])
             {
                 denseEvents = false;
             }
+            else if (arg == "--damping-coeff" || arg == "--damping_coeff")
+            {
+                if (i + 1 < argc) { dampingCoeff = std::atof(argv[++i]); }
+            }
             else
             {
                 posArgs.push_back(arg);
@@ -211,7 +220,7 @@ int main(int argc, char* argv[])
         }
 
         Run(bubFile, filteredFile, outputFile, samplerate, scheme, maxTime, timeJitterHalfWidth, timeJitterSeed,
-            transientPeriods, transientGain, forcingCutoff, forcingEnvelope, denseEvents);
+            transientPeriods, transientGain, forcingCutoff, forcingEnvelope, denseEvents, dampingCoeff);
         return 0;
     }
     catch (const std::out_of_range& e)

@@ -8,6 +8,7 @@
 #include "BubbleUtils.h"
 
 #include <iomanip>
+#include <limits>
 #include <random>
 
 namespace FluidSound {
@@ -16,7 +17,7 @@ namespace FluidSound {
 template <typename T>
 Solver<T>::Solver(const std::string &bubFile, const std::string &filteredFile, double dt, int scheme, double ts,
     double timeJitterHalfWidth, unsigned long long timeJitterSeed, double transientPeriods, double transientGain,
-    double forcingCutoff, ForcingEnvelope forcingEnvelope, bool denseEvents)
+    double forcingCutoff, ForcingEnvelope forcingEnvelope, bool denseEvents, double dampingCoeff)
     : _dt(dt), _ts(ts)
 {
     std::map<int, Bubble<T>> allBubbles;
@@ -36,7 +37,7 @@ Solver<T>::Solver(const std::string &bubFile, const std::string &filteredFile, d
                   << " filtered out (" << std::fixed << std::setprecision(1) << pctFiltered << "%)" << std::endl;
     }
      
-    _makeOscillators(allBubbles, timeJitterHalfWidth, timeJitterSeed, transientPeriods, transientGain, forcingCutoff, denseEvents);
+    _makeOscillators(allBubbles, timeJitterHalfWidth, timeJitterSeed, transientPeriods, transientGain, forcingCutoff, denseEvents, dampingCoeff);
     std::cout << "Total number of oscillators = " << _oscillators.size() << std::endl;
     std::cout << "Total number of event times = " << _eventTimes.size()
               << (denseEvents ? "  (dense: per-sample-line K=w0^2)" : "  (sparse: linear K=w0^2 ramp per oscillator lifetime)")
@@ -188,7 +189,7 @@ T Solver<T>::step()
 /** */
 template <typename T>
 void Solver<T>::_makeOscillators(const std::map<int, Bubble<T>> &bubMap, double timeJitterHalfWidth, unsigned long long timeJitterSeed,
-    double transientPeriods, double transientGain, double forcingCutoff, bool denseEvents)
+    double transientPeriods, double transientGain, double forcingCutoff, bool denseEvents, double dampingCoeff)
 {
     _oscillators.clear();
 
@@ -360,7 +361,7 @@ void Solver<T>::_makeOscillators(const std::map<int, Bubble<T>> &bubMap, double 
         // Transfer solve data from temporary buffers to this Oscillator
         for (int i = 0; i < solveTimes.size(); i++)
         {
-            Cvals.push_back(2. * Oscillator<T>::calcBeta(s_radii[i], s_w0[i]));
+            Cvals.push_back(2. * Oscillator<T>::calcBeta(s_radii[i], s_w0[i], T(dampingCoeff)));
         }
         osc.solveTimes = solveTimes;
         osc.solveData.resize(6, solveTimes.size());
@@ -432,6 +433,51 @@ void Solver<T>::_makeOscillators(const std::map<int, Bubble<T>> &bubMap, double 
         std::cout << "Transient oscillators attenuated = " << transientOscillators
                   << " (duration < " << transientPeriods
                   << " periods, gain=" << transientGain << ")" << std::endl;
+    }
+
+    // Damping (beta) summary across all surviving oscillators. We always print
+    //  this so users can see the actual integrator damping, and so the effect
+    //  of --damping-coeff is visible at runtime. solveData row 5 stores 2*beta.
+    if (!_oscillators.empty())
+    {
+        double bMin = std::numeric_limits<double>::infinity();
+        double bMax = -std::numeric_limits<double>::infinity();
+        double bSum = 0.;
+        long long nB = 0;
+        for (const auto& osc : _oscillators)
+        {
+            const Eigen::Index N = osc.solveData.cols();
+            for (Eigen::Index i = 0; i < N; ++i)
+            {
+                const double beta = 0.5 * static_cast<double>(osc.solveData(5, i));
+                if (beta < bMin) bMin = beta;
+                if (beta > bMax) bMax = beta;
+                bSum += beta;
+                ++nB;
+            }
+        }
+        const double bMean = (nB > 0) ? (bSum / static_cast<double>(nB)) : 0.0;
+        const double tauMin = (bMax > 0) ? (1.0 / bMax) : std::numeric_limits<double>::infinity();
+        const double tauMax = (bMin > 0) ? (1.0 / bMin) : std::numeric_limits<double>::infinity();
+        std::cout << "Damping coefficient applied = " << dampingCoeff
+                  << "  (1.0 = unmodified Czerski/Deane radiative+viscous+thermal)" << std::endl;
+        std::cout << "  beta range across all " << nB << " sample lines: ["
+                  << bMin << ", " << bMax << "] s^-1, mean = " << bMean << " s^-1" << std::endl;
+        std::cout << "  ringdown time tau = 1/beta in [" << tauMin << ", " << tauMax << "] s" << std::endl;
+
+        if (_oscillators.size() == 1)
+        {
+            const auto& osc = _oscillators[0];
+            const Eigen::Index N = osc.solveData.cols();
+            const double w0First = static_cast<double>(osc.solveData(1, 0));
+            const double w0Last = static_cast<double>(osc.solveData(1, N - 1));
+            const double bFirst = 0.5 * static_cast<double>(osc.solveData(5, 0));
+            const double bLast = 0.5 * static_cast<double>(osc.solveData(5, N - 1));
+            std::cout << "  single oscillator: f_first=" << w0First / (2. * M_PI)
+                      << " Hz beta_first=" << bFirst << " s^-1; f_last="
+                      << w0Last / (2. * M_PI) << " Hz beta_last=" << bLast
+                      << " s^-1" << std::endl;
+        }
     }
 }
 

@@ -67,7 +67,7 @@ std::pair<T, T> Oscillator<T>::MergeForcing(T radius, T r1, T r2, T maxCutoff)
 
 /**  */
 template <typename T>
-T Oscillator<T>::calcBeta(T radius, T w0)
+T Oscillator<T>::calcBeta(T radius, T w0, T coeff)
 {
     T dr = w0 * radius / CF;
     T dvis = 4 * MU / (RHO_WATER * w0 * radius * radius);
@@ -76,7 +76,7 @@ T Oscillator<T>::calcBeta(T radius, T w0)
 
     T dtotal = dr + dvis + dth;
 
-    return w0 * dtotal / std::sqrt(dtotal * dtotal + 4);
+    return coeff * w0 * dtotal / std::sqrt(dtotal * dtotal + 4);
 }
 
 template class Oscillator<float>;
