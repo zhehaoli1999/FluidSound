@@ -14,6 +14,8 @@
 
 namespace FluidSound {
 
+enum class ForcingEnvelope { HARD, SMOOTHSTEP };
+
 /**
  * \class Integrator
  * \brief Base RK4 integrator for the oscillator system \f$ M \ddot{v}(t) + C \dot{v}(t) + Kv(t) = F(t) \f$
@@ -25,7 +27,8 @@ template <typename T>
 class Integrator
 {
 public:
-    Integrator(double dt) : _dt(dt) { }
+    Integrator(double dt, ForcingEnvelope forcingEnvelope = ForcingEnvelope::HARD)
+        : _dt(dt), _forcingEnvelope(forcingEnvelope) { }
      
     /** \brief Takes an RK4 integration step */
     void step(double time);
@@ -60,6 +63,7 @@ protected:
 
     Eigen::ArrayX<T> _States;    //!< packed state vectors [v ... v' ...] (across all active Oscillators)
     Eigen::ArrayX<T> _Derivs;    //!< packed derivatives [v' ... v'' ...] (across all active Oscillators)
+    ForcingEnvelope _forcingEnvelope = ForcingEnvelope::HARD;
     
     // Stiffness, damping, and forcing 
     Eigen::ArrayX<T> _Kvals, _Cvals, _Fvals;
@@ -88,7 +92,8 @@ template <typename T>
 class Coupled_Direct : public Integrator<T>
 {
 public:
-    Coupled_Direct(double dt) : Integrator<T>(dt) { }
+    Coupled_Direct(double dt, ForcingEnvelope forcingEnvelope = ForcingEnvelope::HARD)
+        : Integrator<T>(dt, forcingEnvelope) { }
 
     void refactor();
     Eigen::ArrayX<T> solve(const Eigen::ArrayX<T>& States, double time);
@@ -123,7 +128,8 @@ template <typename T>
 class Uncoupled : public Integrator<T>
 {
 public:
-    Uncoupled(double dt) : Integrator<T>(dt) { }
+    Uncoupled(double dt, ForcingEnvelope forcingEnvelope = ForcingEnvelope::HARD)
+        : Integrator<T>(dt, forcingEnvelope) { }
     
     void refactor() { }     // dummy function call
     Eigen::ArrayX<T> solve(const Eigen::ArrayX<T>& State, double time);

@@ -89,19 +89,30 @@ void Integrator<T>::_computeKCF(double time)
     // Compute damping at current time (precomputed, so we just need to interpolate)
     _Cvals = (1. - alpha) * _solveData1.row(5) + alpha * _solveData2.row(5);
 
-    // Compute force at current time (all forcing models we use have the form F(t) = (t < cutoff) * weight * t^2, \see Oscillators)
+    // Compute force at current time (all forcing models we use have the form F(t) = envelope(t/cutoff) * weight * t^2)
     _Fvals = Eigen::ArrayX<T>::Zero(_N_total);
     for (int i = 0; i < _N_coupled; i++)
     {
+        T cutoff, weight, t;
         if (time > _forceData2(0, i))
         {
-            T cutoff = _forceData2(1, i); T weight = _forceData2(2, i); T t = time - _forceData2(0, i);
-            _Fvals[i] = (t < cutoff) * weight * t * t;
+            cutoff = _forceData2(1, i); weight = _forceData2(2, i); t = time - _forceData2(0, i);
         }
         else
         {
-            T cutoff = _forceData1(1, i); T weight = _forceData1(2, i); T t = time - _forceData1(0, i);
-            _Fvals[i] = (t < cutoff) * weight * t * t;
+            cutoff = _forceData1(1, i); weight = _forceData1(2, i); t = time - _forceData1(0, i);
+        }
+
+        if (t >= T(0) && t < cutoff)
+        {
+            T envelope = T(1);
+            if (_forcingEnvelope == ForcingEnvelope::SMOOTHSTEP && cutoff > T(0))
+            {
+                T x = t / cutoff;
+                T smoothstep = x * x * (T(3) - T(2) * x);
+                envelope = T(1) - smoothstep;
+            }
+            _Fvals[i] = envelope * weight * t * t;
         }
     } // FOR NOW, assumes only coupled Oscillators are forced (uncoupled means Oscillator has ended, and we are waiting for it to die out)
 
