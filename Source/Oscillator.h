@@ -78,7 +78,7 @@ struct Oscillator
      * \param[in]  radius  bubble equilibrium radius
      * \return  (cutoff, weight) pair
      */
-    static std::pair<T, T> CzerskiJetForcing(T radius);
+    static std::pair<T, T> CzerskiJetForcing(T radius, T maxCutoff = T(0.0006));
     
     /** 
      * \brief Neck expansion forcing model from [Czerski 2011]
@@ -86,7 +86,7 @@ struct Oscillator
      * \param[in]  r1, r2  radii of parent bubbles
      * \return  (cutoff, weight) pair
      */
-    static std::pair<T, T> MergeForcing(T radius, T r1, T r2);
+    static std::pair<T, T> MergeForcing(T radius, T r1, T r2, T maxCutoff = T(0.0006));
     
     /** \brief Damping via radiative, viscous, and thermal effects */
     static T calcBeta(T radius, T w0);

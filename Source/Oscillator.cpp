@@ -24,8 +24,6 @@ static const double CF = 1497;			// speed of sound in water
 static const double ATM = 101325;		// atmospheric pressure
 
 
-static const double MAX_CUTOFF = 0.0006;
-
 static std::default_random_engine s_forcingRnd;
 static std::uniform_real_distribution<double> s_eta(0.4, 1.5);
 static std::uniform_real_distribution<double> s_frac(0.4, 0.8);
@@ -33,11 +31,12 @@ static std::uniform_real_distribution<double> s_frac(0.4, 0.8);
 
 /** Eq. 14 from [Langlois et al. 2016] */
 template <typename T>
-std::pair<T, T> Oscillator<T>::CzerskiJetForcing(T radius)
+std::pair<T, T> Oscillator<T>::CzerskiJetForcing(T radius, T maxCutoff)
 {
+    // T eta = 0.95;  // TODO
     T eta = 0.95;  // TODO
 
-    T cutoff = std::min(MAX_CUTOFF, 0.5 / (3. / radius));   // 1/2 minnaert period
+    T cutoff = std::min(maxCutoff, T(0.5) / (T(3) / radius));   // 1/2 minnaert period
 
     T pressure_in0 = (ATM + 2. * SIGMA / radius);
     T weight = -9. * GAMMA * SIGMA * eta * pressure_in0 * std::sqrt(1. + eta * eta) / (4. * RHO_WATER * radius * radius * radius);
@@ -49,12 +48,12 @@ std::pair<T, T> Oscillator<T>::CzerskiJetForcing(T radius)
 
 /** Eq. 15 from [Langlois et al. 2016] */
 template <typename T>
-std::pair<T, T> Oscillator<T>::MergeForcing(T radius, T r1, T r2)
+std::pair<T, T> Oscillator<T>::MergeForcing(T radius, T r1, T r2, T maxCutoff)
 {
     T frac = s_frac(s_forcingRnd);
     T factor = std::pow(2. * SIGMA * r1 * r2 / (RHO_WATER * (r1 + r2)), 0.25);
 
-    T cutoff = std::min(MAX_CUTOFF, 0.5 / (3. / radius));   // 1/2 minnaert period
+    T cutoff = std::min(maxCutoff, T(0.5) / (T(3) / radius));   // 1/2 minnaert period
     T tmp = std::pow(frac * std::min(r1, r2) / 2. / factor, 2);     // TODO: cleanup
     cutoff = std::min(cutoff, tmp);
 

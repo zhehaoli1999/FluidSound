@@ -8,12 +8,16 @@
 #include "BubbleUtils.h"
 
 #include <iomanip>
+#include <random>
 
 namespace FluidSound {
 
 /** */
 template <typename T>
-Solver<T>::Solver(const std::string &bubFile, const std::string &filteredFile, double dt, int scheme, double ts) : _dt(dt), _ts(ts)
+Solver<T>::Solver(const std::string &bubFile, const std::string &filteredFile, double dt, int scheme, double ts,
+    double timeJitterHalfWidth, unsigned long long timeJitterSeed, double transientPeriods, double transientGain,
+    double forcingCutoff, ForcingEnvelope forcingEnvelope, bool denseEvents)
+    : _dt(dt), _ts(ts)
 {
     std::map<int, Bubble<T>> allBubbles;
 
@@ -32,8 +36,18 @@ Solver<T>::Solver(const std::string &bubFile, const std::string &filteredFile, d
                   << " filtered out (" << std::fixed << std::setprecision(1) << pctFiltered << "%)" << std::endl;
     }
      
-    _makeOscillators(allBubbles);
+    _makeOscillators(allBubbles, timeJitterHalfWidth, timeJitterSeed, transientPeriods, transientGain, forcingCutoff, denseEvents);
     std::cout << "Total number of oscillators = " << _oscillators.size() << std::endl;
+    std::cout << "Total number of event times = " << _eventTimes.size()
+              << (denseEvents ? "  (dense: per-sample-line K=w0^2)" : "  (sparse: linear K=w0^2 ramp per oscillator lifetime)")
+              << std::endl;
+    if (timeJitterHalfWidth > 0.)
+    {
+        std::cout << "Per-oscillator time jitter: uniform on [-" << timeJitterHalfWidth << ", " << timeJitterHalfWidth << "] s";
+        if (timeJitterSeed != 0ULL)
+            std::cout << " (seed=" << timeJitterSeed << ")";
+        std::cout << std::endl;
+    }
 
     if (!_contributingBubIDs.empty())
     {
@@ -63,8 +77,8 @@ Solver<T>::Solver(const std::string &bubFile, const std::string &filteredFile, d
 
     switch (scheme)
     {
-        case 1: _integrator = new Coupled_Direct<T>(dt); break;
-        default: _integrator = new Uncoupled<T>(dt); break;
+        case 1: _integrator = new Coupled_Direct<T>(dt, forcingEnvelope); break;
+        default: _integrator = new Uncoupled<T>(dt, forcingEnvelope); break;
     }
 }
 
@@ -173,12 +187,13 @@ T Solver<T>::step()
 
 /** */
 template <typename T>
-void Solver<T>::_makeOscillators(const std::map<int, Bubble<T>> &bubMap)
+void Solver<T>::_makeOscillators(const std::map<int, Bubble<T>> &bubMap, double timeJitterHalfWidth, unsigned long long timeJitterSeed,
+    double transientPeriods, double transientGain, double forcingCutoff, bool denseEvents)
 {
     _oscillators.clear();
-    std::set<double> eventTimesSet;
-    
+
     std::set<int> usedBubIDs;
+    size_t transientOscillators = 0;
     for (const std::pair<int, Bubble<T>>& bubPair : bubMap)  // Loop over all bubbles
     {
         // Skip if bubble has already been used
@@ -213,15 +228,23 @@ void Solver<T>::_makeOscillators(const std::map<int, Bubble<T>> &bubMap)
             osc.bubIDs.push_back(curBubID);
             
             // ----- Handle bubble start event: forcing logic -----
-            std::pair<T, T> force(0., 0.);
+            std::pair<T, T> force(T(0), T(0));
 
             if (curBub->startType == EventType::SPLIT)
             {
-                int parentBubID = curBub->prevBubIDs.at(0);
-                if (bubMap.at(parentBubID).radius >= curBub->radius)
-                {
-                    force = Oscillator<T>::CzerskiJetForcing(curBub->radius);
-                }
+                // Tracker glitches in the LBM exhale dataset frequently produce
+                // microscopic-parent -> macroscopic-child SPLIT events (e.g. a 20um
+                // ghost bubble "splits" into a 10mm child). The original guard
+                // `parent.radius >= child.radius` enforced mass-conservation and
+                // therefore zeroed forcing on these glitches, which silenced the
+                // child entirely. We now treat every SPLIT child as a freshly
+                // entrained bubble and force it via CzerskiJetForcing regardless
+                // of the parent's recorded radius.
+                //int parentBubID = curBub->prevBubIDs.at(0);
+                //if (bubMap.at(parentBubID).radius >= curBub->radius)
+                //{
+                    force = Oscillator<T>::CzerskiJetForcing(curBub->radius, T(forcingCutoff));
+                //}
             }
             else if (curBub->startType == EventType::MERGE)  // TODO: cleanup this code
             {
@@ -256,19 +279,19 @@ void Solver<T>::_makeOscillators(const std::map<int, Bubble<T>> &bubMap)
                                 r1 = std::pow(3. / 4. / M_PI * v1, 1. / 3.);
                                 r2 = std::pow(3. / 4. / M_PI * v2, 1. / 3.);
 
-                                force = Oscillator<T>::MergeForcing(curBub->radius, r1, r2);
+                                force = Oscillator<T>::MergeForcing(curBub->radius, r1, r2, T(forcingCutoff));
                             }
                         }
                         else
                         {
-                            force = Oscillator<T>::MergeForcing(curBub->radius, r1, r2);
+                            force = Oscillator<T>::MergeForcing(curBub->radius, r1, r2, T(forcingCutoff));
                         }
                     }
                 }
             }
             else if (curBub->startType == EventType::ENTRAIN)
             {
-                force = Oscillator<T>::CzerskiJetForcing(curBub->radius);
+                force = Oscillator<T>::CzerskiJetForcing(curBub->radius, T(forcingCutoff));
             }
             forceTimes.push_back(curBub->startTime);
             f_cutoffs.push_back(force.first);
@@ -323,6 +346,16 @@ void Solver<T>::_makeOscillators(const std::map<int, Bubble<T>> &bubMap)
         // Filter out short blips
         if (osc.endTime - osc.startTime < 3 * 2 * M_PI / s_w0[0]) { continue; }
 
+        if (transientPeriods > 0. && transientGain < 1.)
+        {
+            double periodCount = (osc.endTime - osc.startTime) / (2 * M_PI / s_w0[0]);
+            if (periodCount < transientPeriods)
+            {
+                for (T& weight : f_weights) { weight *= transientGain; }
+                transientOscillators++;
+            }
+        }
+
 
         // Transfer solve data from temporary buffers to this Oscillator
         for (int i = 0; i < solveTimes.size(); i++)
@@ -347,13 +380,59 @@ void Solver<T>::_makeOscillators(const std::map<int, Bubble<T>> &bubMap)
 
         // Finally, add this Oscillator
         _oscillators.push_back(osc);
-        eventTimesSet.insert(osc.startTime);
-        eventTimesSet.insert(osc.endTime);
-        
     } // END for (const std::pair<int, Bubble>& bubPair : bubMap)
 
     std::sort(_oscillators.begin(), _oscillators.end());
+
+    if (timeJitterHalfWidth > 0.)
+    {
+        std::mt19937 gen;
+        if (timeJitterSeed != 0ULL)
+            gen.seed(static_cast<std::mt19937::result_type>(timeJitterSeed));
+        else
+        {
+            std::random_device rd;
+            gen.seed(rd());
+        }
+        std::uniform_real_distribution<double> dist(-timeJitterHalfWidth, timeJitterHalfWidth);
+        for (auto& osc : _oscillators)
+        {
+            const double d = dist(gen);
+            osc.startTime += d;
+            osc.endTime += d;
+            for (double& t : osc.solveTimes) { t += d; }
+            for (int c = 0; c < osc.forceData.cols(); ++c)
+                osc.forceData(0, c) += static_cast<T>(d);
+        }
+        std::sort(_oscillators.begin(), _oscillators.end());
+    }
+
+    std::set<double> eventTimesSet;
+    for (const auto& osc : _oscillators)
+    {
+        eventTimesSet.insert(osc.startTime);
+        eventTimesSet.insert(osc.endTime);
+        if (denseEvents)
+        {
+            // Insert every per-sample-line solve time (after any jitter shift) so the
+            //  integrator's K=w0^2 ramp follows the trackedBubInfo frequency column
+            //  faithfully instead of linearly interpolating between only the first and
+            //  last solveData column over the entire oscillator lifetime.
+            for (double t : osc.solveTimes)
+            {
+                if (t > osc.startTime && t < osc.endTime)
+                    eventTimesSet.insert(t);
+            }
+        }
+    }
     _eventTimes.assign(eventTimesSet.begin(), eventTimesSet.end());
+
+    if (transientPeriods > 0. && transientGain < 1.)
+    {
+        std::cout << "Transient oscillators attenuated = " << transientOscillators
+                  << " (duration < " << transientPeriods
+                  << " periods, gain=" << transientGain << ")" << std::endl;
+    }
 }
 
 template class Solver<float>;

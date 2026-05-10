@@ -32,8 +32,18 @@ public:
      * \param[in]  dt           timestep size
      * \param[in]  scheme       coupling scheme (0 - uncoupled, 1 - coupled)
      * \param[in]  ts           simulation start time (default 0.)
+     * \param[in]  timeJitterHalfWidth  if > 0, each oscillator timeline is shifted by U(-w,w) to desynchronize grid artifacts
+     * \param[in]  timeJitterSeed       seed for jitter RNG (0 = non-deterministic from std::random_device)
+     * \param[in]  denseEvents          if true, every per-sample-line solveTime is inserted into the
+     *                                  integrator's event-time set so that K=w0^2 is sampled at every
+     *                                  trackedBubInfo row (instead of being a linear ramp between each
+     *                                  oscillator's start and end time, which is the default).
      */
-    Solver(const std::string& bubFile, const std::string& filteredFile, double dt, int scheme, double ts = 0.);
+    Solver(const std::string& bubFile, const std::string& filteredFile, double dt, int scheme, double ts = 0.,
+        double timeJitterHalfWidth = 0., unsigned long long timeJitterSeed = 0ULL,
+        double transientPeriods = 0., double transientGain = 1., double forcingCutoff = 0.0006,
+        ForcingEnvelope forcingEnvelope = ForcingEnvelope::HARD,
+        bool denseEvents = false);
 
     /** \brief Timesteps Oscillator vibrations */
     T step();
@@ -79,7 +89,8 @@ private:
      * \private Given bubble data, chains Bubbles together to form Oscillators
      * \param[in]  bubMap  map from Bubble IDs to Bubble objects
      */
-    void _makeOscillators(const std::map<int, Bubble<T>>& bubMap);
+    void _makeOscillators(const std::map<int, Bubble<T>>& bubMap, double timeJitterHalfWidth, unsigned long long timeJitterSeed,
+        double transientPeriods, double transientGain, double forcingCutoff, bool denseEvents);
 };
 
 } // namespace FluidSound
