@@ -58,8 +58,39 @@ struct Oscillator
         return (1. - alpha) * solveData.col(_idx) + alpha * solveData.col(_idx + 1);
     }
 
-    /** \brief Returns true if this Oscillator has decayed sufficiently */
-    bool is_dead() const { return state.norm() < 1e-10; }
+    /** \brief Returns true if this Oscillator has decayed below the audible floor.
+     *
+     * The audio sample is \f$ \sum_i \mathrm{osc}_i.\mathrm{accel} \f$ ;
+     * removing an oscillator from the active set produces a sample-rate step
+     * of size \f$ |\mathrm{accel}| \f$ . For a free (uncoupled, unforced)
+     * oscillator,
+     * \f[
+     *     \mathrm{accel} \;=\; -2\beta\,\dot v \;-\; \omega_0^2\, v
+     *                    \;\approx\; -\omega_0^2\, v
+     *     \qquad (\beta \ll \omega_0)
+     * \f]
+     * so the worst-case \f$ |\mathrm{accel}| \f$ over the next period is
+     * \f$ \omega_0^2 \cdot \mathrm{envelope} \f$ , where
+     * \f$ \mathrm{envelope} = \sqrt{v^2 + (\dot v / \omega_0)^2} \f$
+     * is the slowly-varying complex amplitude (and is unbiased by the
+     * \f$ v \f$ zero-crossing, unlike \f$ |\mathrm{accel}| \f$ itself).
+     *
+     * The old threshold \f$ \|\mathrm{state}\| < 10^{-10} \f$ is
+     * \f$ K \f$ -blind: for an \f$ \omega_0 = 2\pi \cdot 5\,\text{kHz} \f$
+     * bubble it still admits \f$ |\mathrm{accel}| \lesssim 10^9 \cdot 10^{-10}
+     * = 0.1 \f$ , producing an audible death-click the instant the oscillator
+     * leaves the sum in FluidSound::Solver::step. We now require the
+     * worst-case \f$ |\mathrm{accel}| \f$ itself to be below an inaudible floor.
+     */
+    bool is_dead() const
+    {
+        const T accel_floor = T(1e-6);
+        if (solveData.cols() == 0) { return state.norm() < T(1e-10); }
+        T w0 = solveData.row(1).maxCoeff();
+        if (!(w0 > T(0))) { return state.norm() < T(1e-10); }
+        T envelope = std::sqrt(state(0) * state(0) + (state(1) / w0) * (state(1) / w0));
+        return (w0 * w0) * envelope < accel_floor;
+    }
     
     bool operator < (const Oscillator<T>& osc) const { return startTime < osc.startTime; }
 

@@ -357,6 +357,28 @@ void Solver<T>::_makeOscillators(const std::map<int, Bubble<T>> &bubMap, double 
             }
         }
 
+        // Clip each impulse's cutoff to the time available before the next event
+        // (next chain link, or this Oscillator's endTime for the last impulse).
+        // Otherwise a short-lived bubble (e.g. a SPLIT child that MERGEs back a
+        // few samples later, or any non-largest chain leaf shorter than r/6 ms)
+        // sees its F(t) = env(t/cutoff) * w * t^2 abruptly zeroed at the
+        // coupled->uncoupled transition (Integrators.cpp _computeKCF only writes
+        // _Fvals for the first _N_coupled oscillators) or at the chain switch in
+        // _computeKCF when time crosses _forceData2(0, i). With the smoothstep
+        // envelope, ending exactly at t=cutoff is C^1-zero, so this guarantees a
+        // click-free release and a click-free switch to the next impulse.
+        for (size_t i = 0; i < forceTimes.size(); i++)
+        {
+            const double next = (i + 1 < forceTimes.size())
+                ? forceTimes[i + 1]
+                : osc.endTime;
+            const T max_dur = T(next - forceTimes[i]);
+            if (max_dur > T(0) && f_cutoffs[i] > max_dur)
+            {
+                f_cutoffs[i] = max_dur;
+            }
+        }
+
 
         // Transfer solve data from temporary buffers to this Oscillator
         for (int i = 0; i < solveTimes.size(); i++)
