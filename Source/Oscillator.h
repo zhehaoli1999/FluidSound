@@ -94,6 +94,55 @@ struct Oscillator
     
     bool operator < (const Oscillator<T>& osc) const { return startTime < osc.startTime; }
 
+    /** \brief Fade window (in seconds) for the coupling smoothstep on both sides
+     *  of the oscillator's lifetime. Multiplied into off-diagonal mass-matrix
+     *  entries by Coupled_Direct::_constructMass so that adding or removing this
+     *  oscillator from the coupled set is C^1-smooth instead of a step change
+     *  (which would otherwise produce a Schur-complement click in every other
+     *  coupled bubble's v''). 1 ms = 48 samples at 48 kHz, short enough that
+     *  the temporary "weakly coupled" transient is shorter than a Minnaert
+     *  period at all audible frequencies. Set to 0 to restore the original
+     *  hard-add / hard-remove behavior.
+     */
+    static constexpr double COUPLING_FADE = 0.001;
+
+    /** \brief Coupling weight in [0, 1] for this oscillator at the given time.
+     *
+     *  Hermite smoothstep ramp 0 -> 1 over [startTime, startTime + COUPLING_FADE]
+     *  and 1 -> 0 over [endTime - COUPLING_FADE, endTime]. The product
+     *  \f$ \alpha_i \alpha_j \f$ multiplies every off-diagonal entry of \f$ M \f$
+     *  in Coupled_Direct::_constructMass (diagonal stays at 1). At \f$ \alpha = 0 \f$
+     *  the oscillator's row/col of \f$ M \f$ is exactly \f$ e_i \f$, so adding or
+     *  removing it produces zero Schur correction on the surviving block of
+     *  \f$ M^{-1} \f$ -> no click in any other bubble's \f$ \ddot v \f$.
+     *
+     *  For oscillators whose lifetime is shorter than COUPLING_FADE the fade-in
+     *  and fade-out windows overlap and \f$ \alpha \f$ never reaches 1; physically
+     *  defensible since sub-fade-window transient bubbles barely couple to
+     *  anything anyway.
+     */
+    T coupling_alpha(double time) const
+    {
+        if (COUPLING_FADE <= 0.0) { return T(1); }
+        double fin;
+        if (time <= startTime) { fin = 0.0; }
+        else if (time >= startTime + COUPLING_FADE) { fin = 1.0; }
+        else
+        {
+            double x = (time - startTime) / COUPLING_FADE;
+            fin = x * x * (3.0 - 2.0 * x);
+        }
+        double fout;
+        if (time <= endTime - COUPLING_FADE) { fout = 1.0; }
+        else if (time >= endTime) { fout = 0.0; }
+        else
+        {
+            double x = (endTime - time) / COUPLING_FADE;
+            fout = x * x * (3.0 - 2.0 * x);
+        }
+        return T(fin * fout);
+    }
+
     Eigen::Array<T, 3, Eigen::Dynamic> forceData;
     /**< \brief For indices (0, ..., F), forceData is given by:
      * [[ forceTime(0) ... forceTime(F) ]

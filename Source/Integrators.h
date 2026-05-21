@@ -78,6 +78,16 @@ protected:
     /** \brief packed force data (across all active Oscillators) at endpoint times, \see Oscillators.forceData */
     Eigen::Array<T, 3, Eigen::Dynamic> _forceData1, _forceData2;
 
+    /** \brief Per-coupled-oscillator coupling weight in [0, 1] at the batch endpoint
+     *  times, sampled from Oscillator::coupling_alpha(time). Only the first
+     *  _N_coupled entries are meaningful (uncoupled oscillators do not enter the
+     *  mass matrix). Multiplied into off-diagonal entries of M by
+     *  Coupled_Direct::_constructMass so that adding/removing an oscillator from
+     *  the coupled set is C^1-smooth and produces no Schur-complement click in
+     *  the surviving bubbles' v''.
+     */
+    Eigen::ArrayX<T> _couplingAlpha1, _couplingAlpha2;
+
 public:
     std::chrono::duration<double> coeff_time = std::chrono::duration<double>::zero();
     std::chrono::duration<double> mass_time = std::chrono::duration<double>::zero();
@@ -118,6 +128,7 @@ private:
 
     using Integrator<T>::_t1; using Integrator<T>::_t2;
     using Integrator<T>::_solveData1; using Integrator<T>::_solveData2;
+    using Integrator<T>::_couplingAlpha1; using Integrator<T>::_couplingAlpha2;
 };
 
 /**

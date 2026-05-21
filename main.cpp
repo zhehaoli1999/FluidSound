@@ -23,7 +23,9 @@ void Run(const std::string& bubFile, const std::string& filteredFile, const std:
     double maxTime = 0., double timeJitterHalfWidth = 0., unsigned long long timeJitterSeed = 0ULL,
     double transientPeriods = 0., double transientGain = 1., double forcingCutoff = 0.0006,
     FluidSound::ForcingEnvelope forcingEnvelope = FluidSound::ForcingEnvelope::SMOOTHSTEP,
-    bool denseEvents = false, double dampingCoeff = 1.0)
+    bool denseEvents = false, double dampingCoeff = 1.0,
+    bool applyListenerAttenuation = false,
+    double listenerX = 0., double listenerY = 0., double listenerZ = 0., double listenerEpsilon = 1e-6)
 {
     std::cout << "runFluidSound: bubFile=\"" << bubFile << "\"";
     if (!filteredFile.empty())
@@ -39,6 +41,11 @@ void Run(const std::string& bubFile, const std::string& filteredFile, const std:
     std::cout << " forcing_envelope=" << (forcingEnvelope == FluidSound::ForcingEnvelope::SMOOTHSTEP ? "smoothstep" : "hard");
     std::cout << " dense_events=" << (denseEvents ? "on" : "off");
     std::cout << " damping_coeff=" << dampingCoeff;
+    if (applyListenerAttenuation)
+    {
+        std::cout << " listener_pos=(" << listenerX << ", " << listenerY << ", " << listenerZ << ")"
+                  << " listener_eps=" << listenerEpsilon;
+    }
     std::cout << std::endl;
 
     // Check input file exists
@@ -64,7 +71,8 @@ void Run(const std::string& bubFile, const std::string& filteredFile, const std:
     std::cout << "Creating solver..." << std::endl;
     double dt = 1. / srate;
     FluidSound::Solver<precision> solver(bubFile, filteredFile, dt, scheme, 0., timeJitterHalfWidth, timeJitterSeed,
-        transientPeriods, transientGain, forcingCutoff, forcingEnvelope, denseEvents, dampingCoeff);
+        transientPeriods, transientGain, forcingCutoff, forcingEnvelope, denseEvents, dampingCoeff,
+        applyListenerAttenuation, listenerX, listenerY, listenerZ, listenerEpsilon);
 
     const auto& evTimes = solver.eventTimes();
     if (evTimes.empty())
@@ -127,6 +135,15 @@ int main(int argc, char* argv[])
         //   --damping-coeff C: multiplier on the per-sample beta computed by
         //                   Oscillator::calcBeta. Default 1.0 (Czerski/Deane). Use C<1
         //                   to lengthen ringdown (longer audible ring), C>1 to shorten it.
+        //   --listener-position X Y Z: enable per-oscillator 1/distance-to-listener
+        //                   attenuation on the audio sum. The listener sits at (X, Y, Z)
+        //                   in the same coordinate space as the bubble positions in the
+        //                   input trackedBubInfo. The factor 1 / max(d, eps) is applied
+        //                   AFTER integration (coupled dynamics untouched) per oscillator
+        //                   at every audio sample. eps defaults to 1e-6 and can be
+        //                   overridden via --listener-epsilon. Default off (no attenuation).
+        //   --listener-epsilon E: lower clamp on d used by --listener-position to avoid
+        //                   division blow-ups when a bubble sits exactly on the listener.
         std::string bubFile("../Scenes/GlassPour/trackedBubInfo.txt");
         std::string filteredFile;
         std::string outputFile("output.txt");
@@ -141,6 +158,9 @@ int main(int argc, char* argv[])
         FluidSound::ForcingEnvelope forcingEnvelope = FluidSound::ForcingEnvelope::SMOOTHSTEP;
         bool denseEvents = false;
         double dampingCoeff = 1.0;
+        bool applyListenerAttenuation = false;
+        double listenerX = 0., listenerY = 0., listenerZ = 0.;
+        double listenerEpsilon = 1e-6;
 
         std::vector<std::string> posArgs;
         for (int i = 1; i < argc; i++)
@@ -196,6 +216,24 @@ int main(int argc, char* argv[])
             {
                 if (i + 1 < argc) { dampingCoeff = std::atof(argv[++i]); }
             }
+            else if (arg == "--listener-position" || arg == "--listener_position")
+            {
+                if (i + 3 < argc)
+                {
+                    listenerX = std::atof(argv[++i]);
+                    listenerY = std::atof(argv[++i]);
+                    listenerZ = std::atof(argv[++i]);
+                    applyListenerAttenuation = true;
+                }
+                else
+                {
+                    throw std::runtime_error("--listener-position requires 3 arguments: X Y Z");
+                }
+            }
+            else if (arg == "--listener-epsilon" || arg == "--listener_epsilon")
+            {
+                if (i + 1 < argc) { listenerEpsilon = std::atof(argv[++i]); }
+            }
             else
             {
                 posArgs.push_back(arg);
@@ -220,7 +258,8 @@ int main(int argc, char* argv[])
         }
 
         Run(bubFile, filteredFile, outputFile, samplerate, scheme, maxTime, timeJitterHalfWidth, timeJitterSeed,
-            transientPeriods, transientGain, forcingCutoff, forcingEnvelope, denseEvents, dampingCoeff);
+            transientPeriods, transientGain, forcingCutoff, forcingEnvelope, denseEvents, dampingCoeff,
+            applyListenerAttenuation, listenerX, listenerY, listenerZ, listenerEpsilon);
         return 0;
     }
     catch (const std::out_of_range& e)

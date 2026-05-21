@@ -42,13 +42,27 @@ public:
      *                                  Default 1.0 (original Czerski/Deane radiative+viscous+thermal model);
      *                                  values < 1 lengthen ringdown (longer audible ring), values > 1
      *                                  shorten it.
+     * \param[in]  applyListenerAttenuation  if true, multiply each oscillator's contribution to
+     *                                  the per-sample sum by 1 / max(|pos(t) - listenerPos|, eps),
+     *                                  where pos(t) is the bubble's interpolated trackedBubInfo
+     *                                  position at the current time and eps is a small positive
+     *                                  clamp (default 1e-6) protecting against listener-on-bubble.
+     *                                  Default false (no attenuation; faithful to legacy behavior).
+     * \param[in]  listenerX, listenerY, listenerZ  listener position in the same coordinate space
+     *                                  as the bubble positions in bubFile. Only used when
+     *                                  applyListenerAttenuation is true.
+     * \param[in]  listenerEpsilon      lower clamp on distance for the 1/d attenuation, in the
+     *                                  same units as bubble positions. Default 1e-6.
      */
     Solver(const std::string& bubFile, const std::string& filteredFile, double dt, int scheme, double ts = 0.,
         double timeJitterHalfWidth = 0., unsigned long long timeJitterSeed = 0ULL,
         double transientPeriods = 0., double transientGain = 1., double forcingCutoff = 0.0006,
         ForcingEnvelope forcingEnvelope = ForcingEnvelope::HARD,
         bool denseEvents = false,
-        double dampingCoeff = 1.0);
+        double dampingCoeff = 1.0,
+        bool applyListenerAttenuation = false,
+        double listenerX = 0., double listenerY = 0., double listenerZ = 0.,
+        double listenerEpsilon = 1e-6);
 
     /** \brief Timesteps Oscillator vibrations */
     T step();
@@ -89,6 +103,17 @@ private:
     int _evID = 0;  //!< current _eventTimes index
 
     std::set<int> _contributingBubIDs;   //!< if non-empty, only oscillators with bubIDs in this set contribute to output
+
+    /** \brief If true, each oscillator's per-step accel is scaled by 1 / max(d, eps) with
+     *  d = |interp(time).xyz - listenerPos|. Coupling/integrator dynamics are NOT scaled --
+     *  only the contribution to the audio sum returned by step(). This gives a clean
+     *  far-field listener attenuation without re-coupling the bubble cloud.
+     */
+    bool _applyListenerAttenuation = false;
+    T _listenerX = T(0);
+    T _listenerY = T(0);
+    T _listenerZ = T(0);
+    T _listenerEpsilon = T(1e-6);
 
     /**
      * \private Given bubble data, chains Bubbles together to form Oscillators

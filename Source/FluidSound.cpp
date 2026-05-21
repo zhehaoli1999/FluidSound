@@ -17,9 +17,22 @@ namespace FluidSound {
 template <typename T>
 Solver<T>::Solver(const std::string &bubFile, const std::string &filteredFile, double dt, int scheme, double ts,
     double timeJitterHalfWidth, unsigned long long timeJitterSeed, double transientPeriods, double transientGain,
-    double forcingCutoff, ForcingEnvelope forcingEnvelope, bool denseEvents, double dampingCoeff)
-    : _dt(dt), _ts(ts)
+    double forcingCutoff, ForcingEnvelope forcingEnvelope, bool denseEvents, double dampingCoeff,
+    bool applyListenerAttenuation, double listenerX, double listenerY, double listenerZ, double listenerEpsilon)
+    : _dt(dt), _ts(ts),
+      _applyListenerAttenuation(applyListenerAttenuation),
+      _listenerX(static_cast<T>(listenerX)),
+      _listenerY(static_cast<T>(listenerY)),
+      _listenerZ(static_cast<T>(listenerZ)),
+      _listenerEpsilon(static_cast<T>(std::max(listenerEpsilon, 0.0)))
 {
+    if (_applyListenerAttenuation)
+    {
+        std::cout << "Listener attenuation: 1/d enabled at listenerPos=("
+                  << listenerX << ", " << listenerY << ", " << listenerZ << ")"
+                  << " with d clamp epsilon=" << static_cast<double>(_listenerEpsilon)
+                  << " (same units as trackedBubInfo positions)" << std::endl;
+    }
     std::map<int, Bubble<T>> allBubbles;
 
     std::cout << "Reading bubble data from \"" << bubFile << "\"" << std::endl;
@@ -165,9 +178,27 @@ T Solver<T>::step()
         total_osc[i]->state(1) = _integrator->States()(i + N_total);
 
         total_osc[i]->accel = _integrator->Derivs()(i + N_total);
+
+        // Per-oscillator distance-to-listener attenuation. Applied AFTER integration
+        //  so the coupled mass-matrix dynamics are untouched: only the contribution
+        //  to the mixed audio sample is scaled by 1/d. The interpolated trackedBubInfo
+        //  position lives in solveData rows 2-4 (x, y, z); we re-use the oscillator's
+        //  cached interpolator (_idx tracks monotonic time so this is amortized O(1)).
+        T contribution = total_osc[i]->accel;
+        if (_applyListenerAttenuation)
+        {
+            Eigen::Array<T, 6, 1> d6 = total_osc[i]->interp(time);
+            T dx = d6(2) - _listenerX;
+            T dy = d6(3) - _listenerY;
+            T dz = d6(4) - _listenerZ;
+            T d = std::sqrt(dx * dx + dy * dy + dz * dz);
+            if (d < _listenerEpsilon) { d = _listenerEpsilon; }
+            contribution = contribution / d;
+        }
+
         if (_contributingBubIDs.empty())
         {
-            total_response += total_osc[i]->accel;
+            total_response += contribution;
         }
         else
         {
@@ -175,7 +206,7 @@ T Solver<T>::step()
             {
                 if (_contributingBubIDs.count(bid))
                 {
-                    total_response += total_osc[i]->accel;
+                    total_response += contribution;
                     break;
                 }
             }

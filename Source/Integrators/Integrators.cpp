@@ -64,6 +64,18 @@ void Integrator<T>::updateData(const std::vector<Oscillator<T>*>& coupled_osc, c
         }
     } // FOR NOW, only coupled Oscillators are forced (uncoupled means Oscillator has ended, and we are waiting for it to die out)
 
+    // Per-coupled-oscillator coupling-fade alpha at the batch endpoints. Used by
+    //  Coupled_Direct::_constructMass to ramp off-diagonal M entries on/off so
+    //  the coupled set can grow or shrink without producing a Schur-complement
+    //  click in every surviving bubble's v''.
+    _couplingAlpha1.resize(_N_coupled);
+    _couplingAlpha2.resize(_N_coupled);
+    for (int i = 0; i < _N_coupled; i++)
+    {
+        _couplingAlpha1[i] = total_osc[i]->coupling_alpha(time1);
+        _couplingAlpha2[i] = total_osc[i]->coupling_alpha(time2);
+    }
+
     // Copy [v v'] from individual Oscillators into packed state vector representation
     _States.resize(2 * _N_total);
     for (int i = 0; i < _N_total; i++)
@@ -138,18 +150,30 @@ void Coupled_Direct<T>::_constructMass(double time)
 
     _radii = (1. - alpha) * _solveData1.row(0) + alpha * _solveData2.row(0);
 
+    // Per-oscillator coupling-fade alpha at this time. Linearly interpolated
+    //  between the precomputed endpoint samples in _couplingAlpha{1,2}; off-
+    //  diagonal entries of M are scaled by alpha_i * alpha_j so that a bubble
+    //  entering the coupled set (alpha rising from 0 to 1 over its first
+    //  Oscillator::COUPLING_FADE seconds) or leaving it (alpha falling 1 to 0
+    //  over the last COUPLING_FADE seconds) does so without changing the
+    //  surviving block of M^-1 -> no Schur-complement click in any other
+    //  bubble's v''.
+    Eigen::ArrayX<T> cAlpha = (T(1) - T(alpha)) * _couplingAlpha1 + T(alpha) * _couplingAlpha2;
+
     // Dense, symmetric mass matrix M
     _M.resize(_N_coupled, _N_coupled);
     for (int i = 0; i < _N_coupled; ++i)
     {
         T r_i = _radii[i];
+        T a_i = cAlpha[i];
         for (int j = i; j < _N_coupled; ++j)
         {
             if (i == j) { _M(i, j) = 1.; } // diagonal entries
             else {
                 T r_j = _radii[j];
+                T a_j = cAlpha[j];
                 T distSq = (_centers.col(j) - _centers.col(i)).squaredNorm();
-                _M(i, j) = 1. / std::sqrt(distSq / (r_i * r_j) + _epsSq);
+                _M(i, j) = (a_i * a_j) / std::sqrt(distSq / (r_i * r_j) + _epsSq);
                 _M(j, i) = _M(i, j);
             }
         }
