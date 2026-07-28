@@ -9,6 +9,7 @@
 #ifndef FLUID_SOUND_H
 #define FLUID_SOUND_H
 
+#include <fstream>
 #include <set>
 
 #include "Integrators.h"
@@ -67,6 +68,29 @@ public:
     /** \brief Timesteps Oscillator vibrations */
     T step();
 
+    /**
+     * \brief Enables the energy audit: per-sample population energy bookkeeping and
+     *  per-forcing-impulse event records. Audit-only — the synthesized waveform is
+     *  bit-identical with logging on or off.
+     *
+     * Physical definitions (SI units of the input trackedBubInfo): with effective mass
+     *  m_i = RHO_WATER / (4 pi r_i) and state [v, v'] (volume displacement/velocity),
+     *    E_i      = 1/2 m_i (v'^2 + w0^2 v^2)         [J]
+     *    P_in,i   = m_i (F/m)_i v'                    [W]  (work rate of the forcing)
+     *    P_diss,i = 2 beta_i m_i v'^2                 [W]  (radiative+viscous+thermal)
+     *  so that per oscillator dE/dt = P_in - P_diss (+ slow drift from the w0(t) ramp).
+     *
+     * \param[in]  energyCsvPath  CSV of population sums every `stride` samples:
+     *   time,n_coupled,n_uncoupled,E_tot,KE,PE,P_in,P_diss,Win_cum,Wdiss_cum,
+     *   Win_entrain,Win_merge,Win_split   (cumulative work via trapezoid rule)
+     * \param[in]  eventCsvPath   CSV with one row per forcing impulse:
+     *   t_event,t_close,osc_idx,bub_id,event_type,radius,w0,cutoff,weight,E_before,E_after
+     *   where E_before is the oscillator energy just before the impulse starts and
+     *   E_after the energy once it has finished (or the oscillator ended).
+     * \param[in]  stride         energy CSV row every `stride` samples (48 => 1 kHz)
+     */
+    void enableEnergyLogging(const std::string& energyCsvPath, const std::string& eventCsvPath, int stride = 48);
+
     //void loadState(const std::string &stateFile);
     //void saveState(const std::string &stateFile);
 
@@ -114,6 +138,34 @@ private:
     T _listenerY = T(0);
     T _listenerZ = T(0);
     T _listenerEpsilon = T(1e-6);
+
+    // ---- Energy audit (enableEnergyLogging). All state below is written only when
+    //      _energyLogging is true; the integrator and audio path never read it. ----
+    bool _energyLogging = false;
+    int _energyStride = 48;
+    long long _auditSampleCount = 0;
+    std::ofstream _energyLog;
+    std::ofstream _eventLog;
+    ForcingEnvelope _forcingEnvelope = ForcingEnvelope::HARD;  //!< copy for audit-side F(t) re-evaluation
+    double _WdissCum = 0.;
+    double _WinCum[3] = { 0., 0., 0. };     //!< indexed by EventType (ENTRAIN, MERGE, SPLIT)
+    double _prevPdiss = 0.;                 //!< previous-sample sums for trapezoid accumulation
+    double _prevPinType[3] = { 0., 0., 0. };
+
+    /** \private Population energy sums + impulse crossing bookkeeping at sample start.
+     *  Called with the states at `time` (i.e., BEFORE _integrator->step(time)). */
+    void _auditPreStep(double time, const std::vector<Oscillator<T>*>& total_osc, size_t N_coupled);
+
+    /** \private Closes a started-but-unfinished impulse when its oscillator leaves the
+     *  coupled set (only coupled oscillators are forced). */
+    void _auditFlushEvent(Oscillator<T>* osc, double time);
+
+    /** \private E_i at `time` from current state; optionally returns r, w0, 2beta. */
+    double _oscEnergy(Oscillator<T>* osc, double time, double* r_out = nullptr,
+        double* w0_out = nullptr, double* twoBeta_out = nullptr);
+
+    /** \private Writes one event CSV row and advances the oscillator's audit cursor. */
+    void _auditWriteEvent(Oscillator<T>* osc, double closeTime, double E_after);
 
     /**
      * \private Given bubble data, chains Bubbles together to form Oscillators

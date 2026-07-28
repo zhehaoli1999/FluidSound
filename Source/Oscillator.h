@@ -150,8 +150,23 @@ struct Oscillator
      *  [ weight(0)    ... weight(F)    ]]
      *
      * All forcing functions have the form F(t) = (t < cutoff) * weight * t * t
-     *  (where t is relative to the force start time : t = time - forceTime) 
+     *  (where t is relative to the force start time : t = time - forceTime)
      */
+
+    /** \brief Start-event type (ENTRAIN / MERGE / SPLIT) of the chain link that produced
+     *  each forceData column. forceData itself only stores [time, cutoff, weight]; the
+     *  event type is needed by the energy audit (Solver --energy-log/--event-log) to
+     *  attribute injected energy to topological event classes. Kept as a parallel vector
+     *  so the numeric array consumed by the Integrator is untouched. */
+    std::vector<EventType> forceTypes;
+
+    // ---- Energy-audit bookkeeping (used only when Solver energy logging is enabled;
+    //      never read by the Integrator, so synthesis is unaffected) ----
+    int auditForceIdx = 0;          //!< next forceData column to cross
+    bool auditImpulseOpen = false;  //!< true while impulse auditForceIdx is being forced
+    double auditEbefore = 0.;       //!< oscillator energy just before the open impulse
+    double auditR0 = 0.;            //!< radius at the open impulse's start
+    double auditW00 = 0.;           //!< w0 at the open impulse's start
 
     /** 
      * \brief Neck collapse forcing model from Czerksi/Deane [2008; 2010]

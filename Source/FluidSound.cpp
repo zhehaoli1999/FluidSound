@@ -20,6 +20,7 @@ Solver<T>::Solver(const std::string &bubFile, const std::string &filteredFile, d
     double forcingCutoff, ForcingEnvelope forcingEnvelope, bool denseEvents, double dampingCoeff,
     bool applyListenerAttenuation, double listenerX, double listenerY, double listenerZ, double listenerEpsilon)
     : _dt(dt), _ts(ts),
+      _forcingEnvelope(forcingEnvelope),
       _applyListenerAttenuation(applyListenerAttenuation),
       _listenerX(static_cast<T>(listenerX)),
       _listenerY(static_cast<T>(listenerY)),
@@ -116,6 +117,9 @@ T Solver<T>::step()
             {
                 if (time1 >= osc->endTime)
                 {
+                    // Energy audit: only coupled oscillators are forced, so close any
+                    //  impulse still open on this oscillator before it leaves the set.
+                    if (_energyLogging) { _auditFlushEvent(osc, time); }
                     _uncoupled_osc.push_back(osc);
                     continue;
                 }
@@ -162,6 +166,11 @@ T Solver<T>::step()
     std::vector<Oscillator<T>*> total_osc(_coupled_osc.begin(), _coupled_osc.end());
     total_osc.insert(total_osc.end(), _uncoupled_osc.begin(), _uncoupled_osc.end());
     size_t N_total = total_osc.size();
+
+    // Energy audit: population sums and impulse crossings are evaluated on the states
+    //  at `time`, i.e. BEFORE this step's integration (also when no oscillator is active,
+    //  so the energy CSV keeps a contiguous time axis).
+    if (_energyLogging) { _auditPreStep(time, total_osc, _coupled_osc.size()); }
 
     if (N_total == 0) { return 0.; }
     //if (N_total > 1024) { throw std::runtime_error("Too many bubbles for coupling!"); }
@@ -243,6 +252,7 @@ void Solver<T>::_makeOscillators(const std::map<int, Bubble<T>> &bubMap, double 
         std::vector<T> s_radii, s_w0, s_x, s_y, s_z;
         std::vector<T> Cvals;   // precomputed damping coefficient
         std::vector<T> forceTimes, f_cutoffs, f_weights;
+        std::vector<EventType> f_types;    // start-event type per impulse (energy audit)
 
         while (true)
         {
@@ -328,6 +338,7 @@ void Solver<T>::_makeOscillators(const std::map<int, Bubble<T>> &bubMap, double 
             forceTimes.push_back(curBub->startTime);
             f_cutoffs.push_back(force.first);
             f_weights.push_back(force.second);
+            f_types.push_back(curBub->startType);
 
 
             // ----- Handle bubble end event: chaining logic -----
@@ -430,6 +441,7 @@ void Solver<T>::_makeOscillators(const std::map<int, Bubble<T>> &bubMap, double 
         osc.forceData.row(0) = Eigen::Map<Eigen::VectorX<T>>(forceTimes.data(), forceTimes.size());
         osc.forceData.row(1) = Eigen::Map<Eigen::VectorX<T>>(f_cutoffs.data(), f_cutoffs.size());
         osc.forceData.row(2) = Eigen::Map<Eigen::VectorX<T>>(f_weights.data(), f_weights.size());
+        osc.forceTypes = f_types;
 
 
         // Finally, add this Oscillator
@@ -532,6 +544,186 @@ void Solver<T>::_makeOscillators(const std::map<int, Bubble<T>> &bubMap, double 
                       << " s^-1" << std::endl;
         }
     }
+}
+
+// ======================= Energy audit (enableEnergyLogging) =======================
+// Audit-only bookkeeping: none of this runs unless enableEnergyLogging() was called,
+//  and nothing here writes to oscillator states or integrator inputs, so the
+//  synthesized waveform is bit-identical with logging on or off.
+
+/** Must match RHO_WATER in Oscillator.cpp (file-static there). The effective mass of
+ *  the volume-displacement oscillator is m = RHO_WATER / (4 pi r), the same `mass` used
+ *  by CzerskiJetForcing/MergeForcing to convert pressure forcing to F/m. */
+static const double AUDIT_RHO_WATER = 998.;
+
+/** */
+template <typename T>
+void Solver<T>::enableEnergyLogging(const std::string& energyCsvPath, const std::string& eventCsvPath, int stride)
+{
+    _energyLogging = true;
+    _energyStride = std::max(1, stride);
+
+    _energyLog.open(energyCsvPath);
+    if (!_energyLog.good()) { throw std::runtime_error("Cannot open energy log for writing: " + energyCsvPath); }
+    _energyLog << std::setprecision(12);
+    _energyLog << "time,n_coupled,n_uncoupled,E_tot,KE,PE,P_in,P_diss,Win_cum,Wdiss_cum,Win_entrain,Win_merge,Win_split\n";
+
+    _eventLog.open(eventCsvPath);
+    if (!_eventLog.good()) { throw std::runtime_error("Cannot open event log for writing: " + eventCsvPath); }
+    _eventLog << std::setprecision(12);
+    _eventLog << "t_event,t_close,osc_idx,bub_id,event_type,radius,w0,cutoff,weight,E_before,E_after\n";
+
+    std::cout << "Energy audit: energy CSV \"" << energyCsvPath << "\" (row every " << _energyStride
+              << " samples), event CSV \"" << eventCsvPath << "\"" << std::endl;
+}
+
+/** */
+template <typename T>
+double Solver<T>::_oscEnergy(Oscillator<T>* osc, double time, double* r_out, double* w0_out, double* twoBeta_out)
+{
+    Eigen::Array<T, 6, 1> d6 = osc->interp(time);
+    double r = static_cast<double>(d6(0));
+    double w0 = static_cast<double>(d6(1));
+    double twoBeta = static_cast<double>(d6(5));
+    if (r_out) { *r_out = r; }
+    if (w0_out) { *w0_out = w0; }
+    if (twoBeta_out) { *twoBeta_out = twoBeta; }
+
+    if (!(r > 0.)) { return 0.; }
+    double m = AUDIT_RHO_WATER / (4. * M_PI * r);
+    double v = static_cast<double>(osc->state(0));
+    double vd = static_cast<double>(osc->state(1));
+    return 0.5 * m * (vd * vd + w0 * w0 * v * v);
+}
+
+/** */
+template <typename T>
+void Solver<T>::_auditWriteEvent(Oscillator<T>* osc, double closeTime, double E_after)
+{
+    const int k = osc->auditForceIdx;
+
+    char typeChar = '?';
+    if (k < static_cast<int>(osc->forceTypes.size()))
+    {
+        switch (osc->forceTypes[k])
+        {
+            case EventType::ENTRAIN: typeChar = 'N'; break;
+            case EventType::MERGE:   typeChar = 'M'; break;
+            case EventType::SPLIT:   typeChar = 'S'; break;
+            default:                 typeChar = '?'; break;
+        }
+    }
+    const int bubID = (k < static_cast<int>(osc->bubIDs.size())) ? osc->bubIDs[k] : -1;
+    const long long oscIdx = static_cast<long long>(osc - _oscillators.data());
+
+    _eventLog << static_cast<double>(osc->forceData(0, k)) << ',' << closeTime << ','
+              << oscIdx << ',' << bubID << ',' << typeChar << ','
+              << osc->auditR0 << ',' << osc->auditW00 << ','
+              << static_cast<double>(osc->forceData(1, k)) << ','
+              << static_cast<double>(osc->forceData(2, k)) << ','
+              << osc->auditEbefore << ',' << E_after << '\n';
+
+    osc->auditImpulseOpen = false;
+    osc->auditForceIdx = k + 1;
+}
+
+/** */
+template <typename T>
+void Solver<T>::_auditFlushEvent(Oscillator<T>* osc, double time)
+{
+    if (osc->auditImpulseOpen)
+    {
+        _auditWriteEvent(osc, time, _oscEnergy(osc, time));
+    }
+}
+
+/** */
+template <typename T>
+void Solver<T>::_auditPreStep(double time, const std::vector<Oscillator<T>*>& total_osc, size_t N_coupled)
+{
+    double E_tot = 0., KE = 0., PE = 0., P_diss = 0.;
+    double P_inType[3] = { 0., 0., 0. };
+
+    for (size_t i = 0; i < total_osc.size(); i++)
+    {
+        Oscillator<T>* osc = total_osc[i];
+
+        double r, w0, twoBeta;
+        double Ei = _oscEnergy(osc, time, &r, &w0, &twoBeta);
+        if (!(r > 0.)) { continue; }
+
+        double m = AUDIT_RHO_WATER / (4. * M_PI * r);
+        double vd = static_cast<double>(osc->state(1));
+        double ke = 0.5 * m * vd * vd;
+        E_tot += Ei; KE += ke; PE += Ei - ke;
+        P_diss += twoBeta * m * vd * vd;
+
+        // Only coupled oscillators are forced (see Integrators.cpp::_computeKCF); the
+        //  impulse bookkeeping below therefore only applies to the coupled prefix.
+        if (i >= N_coupled) { continue; }
+
+        while (osc->auditForceIdx < static_cast<int>(osc->forceData.cols()))
+        {
+            const int k = osc->auditForceIdx;
+            const double t0 = static_cast<double>(osc->forceData(0, k));
+            const double cutoff = static_cast<double>(osc->forceData(1, k));
+
+            if (!osc->auditImpulseOpen)
+            {
+                if (t0 >= time + _dt) { break; }    // impulse k not reached yet
+                // Impulse k starts during this step: the current state is pre-impulse.
+                osc->auditEbefore = Ei;
+                osc->auditR0 = r;
+                osc->auditW00 = w0;
+                osc->auditImpulseOpen = true;
+            }
+            if (time >= t0 + cutoff)
+            {
+                // Impulse over by this sample (or zero-cutoff / weight-0 placeholder):
+                //  close it; the next impulse may also start within this same step.
+                _auditWriteEvent(osc, time, Ei);
+                continue;
+            }
+
+            // Impulse k is active at this sample: same closed form as _computeKCF.
+            const double t = time - t0;
+            if (t >= 0. && t < cutoff)
+            {
+                double envelope = 1.;
+                if (_forcingEnvelope == ForcingEnvelope::SMOOTHSTEP && cutoff > 0.)
+                {
+                    const double x = t / cutoff;
+                    envelope = 1. - x * x * (3. - 2. * x);
+                }
+                const double Fm = envelope * static_cast<double>(osc->forceData(2, k)) * t * t;
+                int typeIdx = (k < static_cast<int>(osc->forceTypes.size()))
+                    ? static_cast<int>(osc->forceTypes[k]) : 0;
+                if (typeIdx < 0 || typeIdx > 2) { typeIdx = 0; }
+                P_inType[typeIdx] += m * Fm * vd;
+            }
+            break;
+        }
+    }
+
+    // Cumulative work via trapezoid rule over the audio-rate samples.
+    for (int c = 0; c < 3; c++)
+    {
+        _WinCum[c] += 0.5 * (_prevPinType[c] + P_inType[c]) * _dt;
+        _prevPinType[c] = P_inType[c];
+    }
+    _WdissCum += 0.5 * (_prevPdiss + P_diss) * _dt;
+    _prevPdiss = P_diss;
+
+    if (_auditSampleCount % _energyStride == 0)
+    {
+        const double P_in = P_inType[0] + P_inType[1] + P_inType[2];
+        _energyLog << time << ',' << N_coupled << ',' << (total_osc.size() - N_coupled) << ','
+                   << E_tot << ',' << KE << ',' << PE << ',' << P_in << ',' << P_diss << ','
+                   << (_WinCum[0] + _WinCum[1] + _WinCum[2]) << ',' << _WdissCum << ','
+                   << _WinCum[EventType::ENTRAIN] << ',' << _WinCum[EventType::MERGE] << ','
+                   << _WinCum[EventType::SPLIT] << '\n';
+    }
+    _auditSampleCount++;
 }
 
 template class Solver<float>;
