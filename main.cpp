@@ -25,7 +25,9 @@ void Run(const std::string& bubFile, const std::string& filteredFile, const std:
     FluidSound::ForcingEnvelope forcingEnvelope = FluidSound::ForcingEnvelope::SMOOTHSTEP,
     bool denseEvents = false, double dampingCoeff = 1.0,
     bool applyListenerAttenuation = false,
-    double listenerX = 0., double listenerY = 0., double listenerZ = 0., double listenerEpsilon = 1e-6)
+    double listenerX = 0., double listenerY = 0., double listenerZ = 0., double listenerEpsilon = 1e-6,
+    const std::string& energyLogFile = std::string(), const std::string& eventLogFile = std::string(),
+    int energyStride = 48)
 {
     std::cout << "runFluidSound: bubFile=\"" << bubFile << "\"";
     if (!filteredFile.empty())
@@ -73,6 +75,14 @@ void Run(const std::string& bubFile, const std::string& filteredFile, const std:
     FluidSound::Solver<precision> solver(bubFile, filteredFile, dt, scheme, 0., timeJitterHalfWidth, timeJitterSeed,
         transientPeriods, transientGain, forcingCutoff, forcingEnvelope, denseEvents, dampingCoeff,
         applyListenerAttenuation, listenerX, listenerY, listenerZ, listenerEpsilon);
+
+    if (!energyLogFile.empty() || !eventLogFile.empty())
+    {
+        // If only one of the two log paths was given, derive the other next to it.
+        std::string energyPath = energyLogFile.empty() ? (eventLogFile + "_energy.csv") : energyLogFile;
+        std::string eventPath = eventLogFile.empty() ? (energyLogFile + "_events.csv") : eventLogFile;
+        solver.enableEnergyLogging(energyPath, eventPath, energyStride);
+    }
 
     const auto& evTimes = solver.eventTimes();
     if (evTimes.empty())
@@ -144,6 +154,12 @@ int main(int argc, char* argv[])
         //                   overridden via --listener-epsilon. Default off (no attenuation).
         //   --listener-epsilon E: lower clamp on d used by --listener-position to avoid
         //                   division blow-ups when a bubble sits exactly on the listener.
+        //   --energy-log F: write population oscillator-energy CSV (time,E_tot,KE,PE,
+        //                   P_in,P_diss,cumulative work by event type, ...) to F.
+        //                   Audit-only; the waveform is unchanged.
+        //   --event-log F:  write one CSV row per forcing impulse (event type, radius,
+        //                   w0, cutoff, weight, E_before, E_after) to F.
+        //   --energy-stride N: energy CSV row every N samples (default 48 = 1 kHz @48k).
         std::string bubFile("../Scenes/GlassPour/trackedBubInfo.txt");
         std::string filteredFile;
         std::string outputFile("output.txt");
@@ -161,6 +177,9 @@ int main(int argc, char* argv[])
         bool applyListenerAttenuation = false;
         double listenerX = 0., listenerY = 0., listenerZ = 0.;
         double listenerEpsilon = 1e-6;
+        std::string energyLogFile;
+        std::string eventLogFile;
+        int energyStride = 48;
 
         std::vector<std::string> posArgs;
         for (int i = 1; i < argc; i++)
@@ -234,6 +253,18 @@ int main(int argc, char* argv[])
             {
                 if (i + 1 < argc) { listenerEpsilon = std::atof(argv[++i]); }
             }
+            else if (arg == "--energy-log" || arg == "--energy_log")
+            {
+                if (i + 1 < argc) { energyLogFile = std::string(argv[++i]); }
+            }
+            else if (arg == "--event-log" || arg == "--event_log")
+            {
+                if (i + 1 < argc) { eventLogFile = std::string(argv[++i]); }
+            }
+            else if (arg == "--energy-stride" || arg == "--energy_stride")
+            {
+                if (i + 1 < argc) { energyStride = std::atoi(argv[++i]); }
+            }
             else
             {
                 posArgs.push_back(arg);
@@ -259,7 +290,8 @@ int main(int argc, char* argv[])
 
         Run(bubFile, filteredFile, outputFile, samplerate, scheme, maxTime, timeJitterHalfWidth, timeJitterSeed,
             transientPeriods, transientGain, forcingCutoff, forcingEnvelope, denseEvents, dampingCoeff,
-            applyListenerAttenuation, listenerX, listenerY, listenerZ, listenerEpsilon);
+            applyListenerAttenuation, listenerX, listenerY, listenerZ, listenerEpsilon,
+            energyLogFile, eventLogFile, energyStride);
         return 0;
     }
     catch (const std::out_of_range& e)
