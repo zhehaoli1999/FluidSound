@@ -148,8 +148,10 @@ private:
     std::ofstream _eventLog;
     ForcingEnvelope _forcingEnvelope = ForcingEnvelope::HARD;  //!< copy for audit-side F(t) re-evaluation
     double _WdissCum = 0.;
+    double _WradCum = 0.;                   //!< radiative share of _WdissCum (energy leaving as sound)
     double _WinCum[3] = { 0., 0., 0. };     //!< indexed by EventType (ENTRAIN, MERGE, SPLIT)
     double _prevPdiss = 0.;                 //!< previous-sample sums for trapezoid accumulation
+    double _prevPrad = 0.;
     double _prevPinType[3] = { 0., 0., 0. };
 
     /** \private Population energy sums + impulse crossing bookkeeping at sample start.

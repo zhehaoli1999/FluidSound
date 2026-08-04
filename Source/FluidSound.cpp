@@ -7,6 +7,7 @@
 #include "FluidSound.h"
 #include "BubbleUtils.h"
 
+#include <cmath>
 #include <iomanip>
 #include <limits>
 #include <random>
@@ -106,7 +107,10 @@ T Solver<T>::step()
     // Check if any events (e.g., Bubbles added or removed) will occurr during this timestep
     while (_evID < _eventTimes.size() && time >= _eventTimes[_evID])
     {
-        if (time < _eventTimes[_evID + 1])
+        // The last event has no successor: nothing starts after it and impulse
+        //  cutoffs are pre-clipped to oscillator end times, so the update block
+        //  is skipped rather than reading past _eventTimes.
+        if (_evID + 1 < _eventTimes.size() && time < _eventTimes[_evID + 1])
         {
             double time1 = _eventTimes[_evID]; double time2 = _eventTimes[_evID + 1];
 
@@ -556,6 +560,24 @@ void Solver<T>::_makeOscillators(const std::map<int, Bubble<T>> &bubMap, double 
  *  by CzerskiJetForcing/MergeForcing to convert pressure forcing to F/m. */
 static const double AUDIT_RHO_WATER = 998.;
 
+/** Radiative fraction dr / (dr + dvis + dth) of the total damping, recomputed with the
+ *  same per-mechanism terms as Oscillator::calcBeta (constants must match Oscillator.cpp,
+ *  which keeps them file-static). Splits P_diss into the share leaving as sound. */
+static double auditRadiativeFraction(double r, double w0)
+{
+    static const double GAMMA = 1.4, MU = 8.9e-4, GTH = 1.6e6, G = 1.0, CF = 1497.;
+    if (!(r > 0.) || !(w0 > 0.)) { return 0.; }
+
+    double dr = w0 * r / CF;
+    double dvis = 4. * MU / (AUDIT_RHO_WATER * w0 * r * r);
+    double phi = 16. * GTH * G / (9. * (GAMMA - 1.) * (GAMMA - 1.) * w0 / 2. / M_PI);
+    double dth = 2. * (std::sqrt(phi - 3.) - (3. * GAMMA - 1.) / (3. * (GAMMA - 1.))) / (phi - 4.);
+
+    double dtotal = dr + dvis + dth;
+    if (!(dtotal > 0.) || !std::isfinite(dtotal)) { return 0.; }
+    return dr / dtotal;
+}
+
 /** */
 template <typename T>
 void Solver<T>::enableEnergyLogging(const std::string& energyCsvPath, const std::string& eventCsvPath, int stride)
@@ -566,7 +588,7 @@ void Solver<T>::enableEnergyLogging(const std::string& energyCsvPath, const std:
     _energyLog.open(energyCsvPath);
     if (!_energyLog.good()) { throw std::runtime_error("Cannot open energy log for writing: " + energyCsvPath); }
     _energyLog << std::setprecision(12);
-    _energyLog << "time,n_coupled,n_uncoupled,E_tot,KE,PE,P_in,P_diss,Win_cum,Wdiss_cum,Win_entrain,Win_merge,Win_split\n";
+    _energyLog << "time,n_coupled,n_uncoupled,E_tot,KE,PE,P_in,P_diss,Win_cum,Wdiss_cum,Win_entrain,Win_merge,Win_split,Wrad_cum\n";
 
     _eventLog.open(eventCsvPath);
     if (!_eventLog.good()) { throw std::runtime_error("Cannot open event log for writing: " + eventCsvPath); }
@@ -641,7 +663,7 @@ void Solver<T>::_auditFlushEvent(Oscillator<T>* osc, double time)
 template <typename T>
 void Solver<T>::_auditPreStep(double time, const std::vector<Oscillator<T>*>& total_osc, size_t N_coupled)
 {
-    double E_tot = 0., KE = 0., PE = 0., P_diss = 0.;
+    double E_tot = 0., KE = 0., PE = 0., P_diss = 0., P_rad = 0.;
     double P_inType[3] = { 0., 0., 0. };
 
     for (size_t i = 0; i < total_osc.size(); i++)
@@ -656,7 +678,9 @@ void Solver<T>::_auditPreStep(double time, const std::vector<Oscillator<T>*>& to
         double vd = static_cast<double>(osc->state(1));
         double ke = 0.5 * m * vd * vd;
         E_tot += Ei; KE += ke; PE += Ei - ke;
-        P_diss += twoBeta * m * vd * vd;
+        double Pd_i = twoBeta * m * vd * vd;
+        P_diss += Pd_i;
+        P_rad += auditRadiativeFraction(r, w0) * Pd_i;
 
         // Only coupled oscillators are forced (see Integrators.cpp::_computeKCF); the
         //  impulse bookkeeping below therefore only applies to the coupled prefix.
@@ -713,6 +737,8 @@ void Solver<T>::_auditPreStep(double time, const std::vector<Oscillator<T>*>& to
     }
     _WdissCum += 0.5 * (_prevPdiss + P_diss) * _dt;
     _prevPdiss = P_diss;
+    _WradCum += 0.5 * (_prevPrad + P_rad) * _dt;
+    _prevPrad = P_rad;
 
     if (_auditSampleCount % _energyStride == 0)
     {
@@ -721,7 +747,7 @@ void Solver<T>::_auditPreStep(double time, const std::vector<Oscillator<T>*>& to
                    << E_tot << ',' << KE << ',' << PE << ',' << P_in << ',' << P_diss << ','
                    << (_WinCum[0] + _WinCum[1] + _WinCum[2]) << ',' << _WdissCum << ','
                    << _WinCum[EventType::ENTRAIN] << ',' << _WinCum[EventType::MERGE] << ','
-                   << _WinCum[EventType::SPLIT] << '\n';
+                   << _WinCum[EventType::SPLIT] << ',' << _WradCum << '\n';
     }
     _auditSampleCount++;
 }
