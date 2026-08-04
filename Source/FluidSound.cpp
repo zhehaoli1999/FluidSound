@@ -19,15 +19,30 @@ template <typename T>
 Solver<T>::Solver(const std::string &bubFile, const std::string &filteredFile, double dt, int scheme, double ts,
     double timeJitterHalfWidth, unsigned long long timeJitterSeed, double transientPeriods, double transientGain,
     double forcingCutoff, ForcingEnvelope forcingEnvelope, bool denseEvents, double dampingCoeff,
-    bool applyListenerAttenuation, double listenerX, double listenerY, double listenerZ, double listenerEpsilon)
+    bool applyListenerAttenuation, double listenerX, double listenerY, double listenerZ, double listenerEpsilon,
+    const ForcingParams& forcingParams)
     : _dt(dt), _ts(ts),
       _forcingEnvelope(forcingEnvelope),
       _applyListenerAttenuation(applyListenerAttenuation),
       _listenerX(static_cast<T>(listenerX)),
       _listenerY(static_cast<T>(listenerY)),
       _listenerZ(static_cast<T>(listenerZ)),
-      _listenerEpsilon(static_cast<T>(std::max(listenerEpsilon, 0.0)))
+      _listenerEpsilon(static_cast<T>(std::max(listenerEpsilon, 0.0))),
+      _forcingParams(forcingParams)
 {
+    if (_forcingParams.calibrated)
+    {
+        std::cout << "Forcing model: calibrated (zeta=" << _forcingParams.zeta
+                  << ", tau=[" << _forcingParams.tauMin << ", " << _forcingParams.tauMax << "] s"
+                  << ", eps0=" << _forcingParams.epsRef << "@" << _forcingParams.epsRRef << "m^-" << _forcingParams.epsExp
+                  << " in [" << _forcingParams.epsMin << ", " << _forcingParams.epsMax << "]"
+                  << ", energy cap eta=" << _forcingParams.energyCapEta
+                  << ", refractory=" << _forcingParams.refractoryPeriods << " periods)" << std::endl;
+    }
+    else
+    {
+        std::cout << "Forcing model: legacy (Czerski/Deane, cutoff cap " << forcingCutoff << " s)" << std::endl;
+    }
     if (_applyListenerAttenuation)
     {
         std::cout << "Listener attenuation: 1/d enabled at listenerPos=("
@@ -258,6 +273,8 @@ void Solver<T>::_makeOscillators(const std::map<int, Bubble<T>> &bubMap, double 
         std::vector<T> forceTimes, f_cutoffs, f_weights;
         std::vector<EventType> f_types;    // start-event type per impulse (energy audit)
 
+        double lastImpulseTime = -1e30;    // refractory gating (calibrated model)
+
         while (true)
         {
             bool lastBub = true;
@@ -276,21 +293,56 @@ void Solver<T>::_makeOscillators(const std::map<int, Bubble<T>> &bubMap, double 
             // ----- Handle bubble start event: forcing logic -----
             std::pair<T, T> force(T(0), T(0));
 
+            // Calibrated model inputs: the oscillator's ACTUAL birth frequency
+            // (includes NN prediction and any file-level scaling) and damping.
+            const bool calib = _forcingParams.calibrated;
+            const double w0first = curBub->w0.empty()
+                ? 2. * M_PI * 3.26 / std::max(static_cast<double>(curBub->radius), 1e-6)
+                : static_cast<double>(curBub->w0.front());
+            const bool smoothstepEnv = (_forcingEnvelope == ForcingEnvelope::SMOOTHSTEP);
+            T betaFirst = T(0);
+            if (calib)
+            {
+                betaFirst = Oscillator<T>::calcBeta(curBub->radius, static_cast<T>(w0first), static_cast<T>(dampingCoeff));
+            }
+
             if (curBub->startType == EventType::SPLIT)
             {
-                // Tracker glitches in the LBM exhale dataset frequently produce
-                // microscopic-parent -> macroscopic-child SPLIT events (e.g. a 20um
-                // ghost bubble "splits" into a 10mm child). The original guard
-                // `parent.radius >= child.radius` enforced mass-conservation and
-                // therefore zeroed forcing on these glitches, which silenced the
-                // child entirely. We now treat every SPLIT child as a freshly
-                // entrained bubble and force it via CzerskiJetForcing regardless
-                // of the parent's recorded radius.
-                //int parentBubID = curBub->prevBubIDs.at(0);
-                //if (bubMap.at(parentBubID).radius >= curBub->radius)
-                //{
+                if (calib)
+                {
+                    // Surface-energy scale of the split, attributed to this child
+                    // by its area share (parent + siblings from the graph).
+                    T deltaArea = T(0);
+                    if (!curBub->prevBubIDs.empty() && bubMap.count(curBub->prevBubIDs.front()))
+                    {
+                        const Bubble<T>& par = bubMap.at(curBub->prevBubIDs.front());
+                        double rp = static_cast<double>(par.radius);
+                        double sumA = 0.;
+                        for (int cid : par.nextBubIDs)
+                        {
+                            if (bubMap.count(cid))
+                            {
+                                double rc = static_cast<double>(bubMap.at(cid).radius);
+                                sumA += rc * rc;
+                            }
+                        }
+                        if (sumA > 0.)
+                        {
+                            double rc = static_cast<double>(curBub->radius);
+                            double dAtot = 4. * M_PI * std::abs(sumA - rp * rp);
+                            deltaArea = static_cast<T>(dAtot * (rc * rc / sumA));
+                        }
+                    }
+                    force = Oscillator<T>::CalibratedForcing(curBub->radius, static_cast<T>(w0first),
+                        betaFirst, T(-1), deltaArea, _forcingParams, smoothstepEnv);
+                }
+                else
+                {
+                    // Legacy: every SPLIT child is treated as freshly entrained
+                    // (the parent.radius >= child.radius mass guard was removed to
+                    // work around tracker glitches; see git history).
                     force = Oscillator<T>::CzerskiJetForcing(curBub->radius, T(forcingCutoff));
-                //}
+                }
             }
             else if (curBub->startType == EventType::MERGE)  // TODO: cleanup this code
             {
@@ -310,6 +362,7 @@ void Solver<T>::_makeOscillators(const std::map<int, Bubble<T>> &bubMap, double 
                         T r1 = bubMap.at(p1).radius;
                         T r2 = bubMap.at(p2).radius;
 
+                        bool haveRadii = true;
                         if (r1 + r2 > curBub->radius)
                         {
                             T v1 = 4. / 3. * M_PI * r1 * r1 * r1;
@@ -324,20 +377,58 @@ void Solver<T>::_makeOscillators(const std::map<int, Bubble<T>> &bubMap, double 
 
                                 r1 = std::pow(3. / 4. / M_PI * v1, 1. / 3.);
                                 r2 = std::pow(3. / 4. / M_PI * v2, 1. / 3.);
+                            }
+                            else { haveRadii = false; }
+                        }
 
+                        if (haveRadii)
+                        {
+                            if (calib)
+                            {
+                                double rn = static_cast<double>(curBub->radius);
+                                double dA = 4. * M_PI * std::abs(
+                                    static_cast<double>(r1) * static_cast<double>(r1)
+                                    + static_cast<double>(r2) * static_cast<double>(r2) - rn * rn);
+                                force = Oscillator<T>::CalibratedForcing(curBub->radius, static_cast<T>(w0first),
+                                    betaFirst, T(1), static_cast<T>(dA), _forcingParams, smoothstepEnv);
+                            }
+                            else
+                            {
                                 force = Oscillator<T>::MergeForcing(curBub->radius, r1, r2, T(forcingCutoff));
                             }
-                        }
-                        else
-                        {
-                            force = Oscillator<T>::MergeForcing(curBub->radius, r1, r2, T(forcingCutoff));
                         }
                     }
                 }
             }
             else if (curBub->startType == EventType::ENTRAIN)
             {
-                force = Oscillator<T>::CzerskiJetForcing(curBub->radius, T(forcingCutoff));
+                if (calib)
+                {
+                    force = Oscillator<T>::CalibratedForcing(curBub->radius, static_cast<T>(w0first),
+                        betaFirst, T(-1), T(0), _forcingParams, smoothstepEnv);
+                }
+                else
+                {
+                    force = Oscillator<T>::CzerskiJetForcing(curBub->radius, T(forcingCutoff));
+                }
+            }
+
+            // Refractory gating: a chain link arriving within N periods of the
+            // previous impulse keeps ringing instead of being re-kicked (a real
+            // bubble's ringdown lasts Q ~ tens of periods; re-impulsing faster
+            // than that turns tonal decay into a click train).
+            if (calib && force.second != T(0))
+            {
+                if (_forcingParams.refractoryPeriods > 0.
+                    && curBub->startTime - lastImpulseTime
+                       < _forcingParams.refractoryPeriods * 2. * M_PI / w0first)
+                {
+                    force = std::pair<T, T>(T(0), T(0));
+                }
+                else
+                {
+                    lastImpulseTime = curBub->startTime;
+                }
             }
             forceTimes.push_back(curBub->startTime);
             f_cutoffs.push_back(force.first);

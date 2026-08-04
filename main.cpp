@@ -27,7 +27,8 @@ void Run(const std::string& bubFile, const std::string& filteredFile, const std:
     bool applyListenerAttenuation = false,
     double listenerX = 0., double listenerY = 0., double listenerZ = 0., double listenerEpsilon = 1e-6,
     const std::string& energyLogFile = std::string(), const std::string& eventLogFile = std::string(),
-    int energyStride = 48)
+    int energyStride = 48,
+    const FluidSound::ForcingParams& forcingParams = FluidSound::ForcingParams())
 {
     std::cout << "runFluidSound: bubFile=\"" << bubFile << "\"";
     if (!filteredFile.empty())
@@ -43,6 +44,16 @@ void Run(const std::string& bubFile, const std::string& filteredFile, const std:
     std::cout << " forcing_envelope=" << (forcingEnvelope == FluidSound::ForcingEnvelope::SMOOTHSTEP ? "smoothstep" : "hard");
     std::cout << " dense_events=" << (denseEvents ? "on" : "off");
     std::cout << " damping_coeff=" << dampingCoeff;
+    std::cout << " forcing_model=" << (forcingParams.calibrated ? "calibrated" : "legacy");
+    if (forcingParams.calibrated)
+    {
+        std::cout << " (zeta=" << forcingParams.zeta
+                  << " tau=[" << forcingParams.tauMin << "," << forcingParams.tauMax << "]"
+                  << " eps0=" << forcingParams.epsRef << "@" << forcingParams.epsRRef << "^-" << forcingParams.epsExp
+                  << " in[" << forcingParams.epsMin << "," << forcingParams.epsMax << "]"
+                  << " eta=" << forcingParams.energyCapEta
+                  << " refractory=" << forcingParams.refractoryPeriods << ")";
+    }
     if (applyListenerAttenuation)
     {
         std::cout << " listener_pos=(" << listenerX << ", " << listenerY << ", " << listenerZ << ")"
@@ -74,7 +85,7 @@ void Run(const std::string& bubFile, const std::string& filteredFile, const std:
     double dt = 1. / srate;
     FluidSound::Solver<precision> solver(bubFile, filteredFile, dt, scheme, 0., timeJitterHalfWidth, timeJitterSeed,
         transientPeriods, transientGain, forcingCutoff, forcingEnvelope, denseEvents, dampingCoeff,
-        applyListenerAttenuation, listenerX, listenerY, listenerZ, listenerEpsilon);
+        applyListenerAttenuation, listenerX, listenerY, listenerZ, listenerEpsilon, forcingParams);
 
     if (!energyLogFile.empty() || !eventLogFile.empty())
     {
@@ -160,6 +171,19 @@ int main(int argc, char* argv[])
         //   --event-log F:  write one CSV row per forcing impulse (event type, radius,
         //                   w0, cutoff, weight, E_before, E_after) to F.
         //   --energy-stride N: energy CSV row every N samples (default 48 = 1 kHz @48k).
+        //   --forcing-model calibrated|legacy: excitation model (default calibrated).
+        //                   legacy = bit-identical Czerski/Deane path (sub-mm fit,
+        //                   fixed 0.6 ms cutoff); calibrated = measured-eps0 amplitude,
+        //                   period-based contact time, surface-tension energy cap,
+        //                   refractory gating (see ForcingParams in Oscillator.h).
+        //   --forcing-zeta Z: contact time tau = clamp(Z * 2pi/w0, tau_min, tau_max) (default 0.5)
+        //   --forcing-tau-min S / --forcing-tau-max S: tau clamp (default 5e-4 / 2e-2)
+        //   --epsilon-ref E / --epsilon-rref R / --epsilon-exp N: eps0(R) = E*(R/Rref)^-N
+        //                   (default 0.01 @ 1 mm, N = 0.5); clamped to
+        //   --epsilon-min / --epsilon-max (default 1e-4 / 0.02)
+        //   --energy-cap-eta H: injected energy <= H * sigma * |dA| (default 0.1; <=0 off)
+        //   --refractory-periods N: no re-impulse within N periods of the last one
+        //                   (default 3; <=0 off)
         std::string bubFile("../Scenes/GlassPour/trackedBubInfo.txt");
         std::string filteredFile;
         std::string outputFile("output.txt");
@@ -180,6 +204,7 @@ int main(int argc, char* argv[])
         std::string energyLogFile;
         std::string eventLogFile;
         int energyStride = 48;
+        FluidSound::ForcingParams forcingParams;   // default: calibrated
 
         std::vector<std::string> posArgs;
         for (int i = 1; i < argc; i++)
@@ -265,6 +290,56 @@ int main(int argc, char* argv[])
             {
                 if (i + 1 < argc) { energyStride = std::atoi(argv[++i]); }
             }
+            else if (arg == "--forcing-model" || arg == "--forcing_model")
+            {
+                if (i + 1 < argc)
+                {
+                    std::string model = std::string(argv[++i]);
+                    if (model == "calibrated") { forcingParams.calibrated = true; }
+                    else if (model == "legacy") { forcingParams.calibrated = false; }
+                    else { throw std::runtime_error("Invalid --forcing-model (expected calibrated or legacy): " + model); }
+                }
+            }
+            else if (arg == "--forcing-zeta" || arg == "--forcing_zeta")
+            {
+                if (i + 1 < argc) { forcingParams.zeta = std::atof(argv[++i]); }
+            }
+            else if (arg == "--forcing-tau-min" || arg == "--forcing_tau_min")
+            {
+                if (i + 1 < argc) { forcingParams.tauMin = std::atof(argv[++i]); }
+            }
+            else if (arg == "--forcing-tau-max" || arg == "--forcing_tau_max")
+            {
+                if (i + 1 < argc) { forcingParams.tauMax = std::atof(argv[++i]); }
+            }
+            else if (arg == "--epsilon-ref" || arg == "--epsilon_ref")
+            {
+                if (i + 1 < argc) { forcingParams.epsRef = std::atof(argv[++i]); }
+            }
+            else if (arg == "--epsilon-rref" || arg == "--epsilon_rref")
+            {
+                if (i + 1 < argc) { forcingParams.epsRRef = std::atof(argv[++i]); }
+            }
+            else if (arg == "--epsilon-exp" || arg == "--epsilon_exp")
+            {
+                if (i + 1 < argc) { forcingParams.epsExp = std::atof(argv[++i]); }
+            }
+            else if (arg == "--epsilon-min" || arg == "--epsilon_min")
+            {
+                if (i + 1 < argc) { forcingParams.epsMin = std::atof(argv[++i]); }
+            }
+            else if (arg == "--epsilon-max" || arg == "--epsilon_max")
+            {
+                if (i + 1 < argc) { forcingParams.epsMax = std::atof(argv[++i]); }
+            }
+            else if (arg == "--energy-cap-eta" || arg == "--energy_cap_eta")
+            {
+                if (i + 1 < argc) { forcingParams.energyCapEta = std::atof(argv[++i]); }
+            }
+            else if (arg == "--refractory-periods" || arg == "--refractory_periods")
+            {
+                if (i + 1 < argc) { forcingParams.refractoryPeriods = std::atof(argv[++i]); }
+            }
             else
             {
                 posArgs.push_back(arg);
@@ -291,7 +366,7 @@ int main(int argc, char* argv[])
         Run(bubFile, filteredFile, outputFile, samplerate, scheme, maxTime, timeJitterHalfWidth, timeJitterSeed,
             transientPeriods, transientGain, forcingCutoff, forcingEnvelope, denseEvents, dampingCoeff,
             applyListenerAttenuation, listenerX, listenerY, listenerZ, listenerEpsilon,
-            energyLogFile, eventLogFile, energyStride);
+            energyLogFile, eventLogFile, energyStride, forcingParams);
         return 0;
     }
     catch (const std::out_of_range& e)

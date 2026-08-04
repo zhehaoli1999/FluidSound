@@ -63,7 +63,8 @@ public:
         double dampingCoeff = 1.0,
         bool applyListenerAttenuation = false,
         double listenerX = 0., double listenerY = 0., double listenerZ = 0.,
-        double listenerEpsilon = 1e-6);
+        double listenerEpsilon = 1e-6,
+        const ForcingParams& forcingParams = ForcingParams());
 
     /** \brief Timesteps Oscillator vibrations */
     T step();
@@ -138,6 +139,8 @@ private:
     T _listenerY = T(0);
     T _listenerZ = T(0);
     T _listenerEpsilon = T(1e-6);
+
+    ForcingParams _forcingParams;   //!< excitation model selection + parameters
 
     // ---- Energy audit (enableEnergyLogging). All state below is written only when
     //      _energyLogging is true; the integrator and audio path never read it. ----

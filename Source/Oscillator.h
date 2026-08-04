@@ -15,9 +15,47 @@
 namespace FluidSound {
 
 /**
+ * \struct ForcingParams
+ * \brief Parameters of the calibrated excitation model (--forcing-model calibrated).
+ *
+ * The legacy Czerski/Deane neck-collapse amplitudes were fit to sub-millimeter
+ * bubbles; on LBM-scale (cm) bubbles the fixed 0.6 ms cutoff and 1/r^2 weight
+ * produce broadband clicks with an unphysical size-loudness balance. The
+ * calibrated model instead targets the MEASURED initial excitation amplitude
+ * eps0 = dR/R0 (Deane & Stokes 2008; Berges et al. 2022, JASA) with a contact
+ * time tied to the oscillation period, and bounds every impulse by the surface
+ * tension energy the topological event can release (sigma * |dA|).
+ */
+struct ForcingParams
+{
+    bool calibrated = true;         //!< false = bit-identical legacy forcing
+
+    // Contact time tau = clamp(zeta * 2*pi/w0, tauMin, tauMax): the forcing
+    // bump's spectral knee sits at ~1/tau, i.e. at the bubble's own frequency.
+    double zeta = 0.5;
+    double tauMin = 5e-4;           //!< [s]
+    double tauMax = 2e-2;           //!< [s]
+
+    // Target initial excitation eps0(R) = clamp(epsRef*(R/epsRRef)^-epsExp,
+    // epsMin, epsMax), peak volume displacement v_target = 4*pi*R^3*eps0.
+    double epsRef = 0.01;
+    double epsRRef = 0.001;         //!< [m]
+    double epsExp = 0.5;
+    double epsMin = 1e-4;
+    double epsMax = 0.02;
+
+    // Per-event energy bound: injected energy <= energyCapEta * sigma * |dA|.
+    double energyCapEta = 0.1;      //!< <= 0 disables the cap
+
+    // A chain link within refractoryPeriods * 2*pi/w0 of the previous impulse
+    // is not re-excited (the oscillator keeps ringing instead).
+    double refractoryPeriods = 3.0; //!< <= 0 disables gating
+};
+
+/**
  * \class Oscillator
  * \brief Represents a single oscillator, \f$ \ddot{v}(t) + 2\beta \dot{v}(t) + \omega_0^2 v(t) = p(t) / m \f$
- * 
+ *
  * Whereas the Bubble struct corresponds to physical bubbles, the Oscillator struct is more of a
  *   mathematical abstraction, meant to interface efficiently with the Integrator class
  */
@@ -175,13 +213,33 @@ struct Oscillator
      */
     static std::pair<T, T> CzerskiJetForcing(T radius, T maxCutoff = T(0.0006));
     
-    /** 
+    /**
      * \brief Neck expansion forcing model from [Czerski 2011]
      * \param[in]  radius  bubble equilibrium radius
      * \param[in]  r1, r2  radii of parent bubbles
      * \return  (cutoff, weight) pair
      */
     static std::pair<T, T> MergeForcing(T radius, T r1, T r2, T maxCutoff = T(0.0006));
+
+    /**
+     * \brief eps0-calibrated excitation (see ForcingParams).
+     *
+     * Numerically integrates the unit-weight response of
+     * v'' + 2*beta*v' + w0^2 v = envelope(t/tau) * t^2 once per event to find
+     * the weight whose peak volume displacement equals v_target = 4*pi*R^3*
+     * eps0(R), then rescales it so the injected energy stays below
+     * energyCapEta * sigma * |deltaArea|.
+     *
+     * \param[in]  radius      bubble equilibrium radius [m]
+     * \param[in]  w0          oscillator angular frequency [rad/s] (actual, incl. NN/scaling)
+     * \param[in]  beta        damping coefficient beta [1/s] (incl. dampingCoeff)
+     * \param[in]  weightSign  +1/-1: sign convention of the event type (jet -, merge +)
+     * \param[in]  deltaArea   interfacial area change of the event [m^2] (<= 0: entrain default 4*pi*R^2)
+     * \param[in]  smoothstepEnvelope  must match the integrator's envelope
+     * \return  (cutoff, weight) pair
+     */
+    static std::pair<T, T> CalibratedForcing(T radius, T w0, T beta, T weightSign,
+        T deltaArea, const ForcingParams& fp, bool smoothstepEnvelope);
     
     /** \brief Damping via radiative, viscous, and thermal effects.
      *  \param[in]  coeff   multiplier on the returned beta (default 1, the
