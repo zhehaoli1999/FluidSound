@@ -22,7 +22,8 @@ namespace FluidSound {
  * bubbles; on LBM-scale (cm) bubbles the fixed 0.6 ms cutoff and 1/r^2 weight
  * produce broadband clicks with an unphysical size-loudness balance. The
  * calibrated model instead targets the MEASURED initial excitation amplitude
- * eps0 = dR/R0 (Deane & Stokes 2008; Berges et al. 2022, JASA) with a contact
+ * eps0 = dR/R0 (Deane & Stokes 2008; Roche et al. 2022, JASA 152(2):799,
+ * "Methods of acoustic gas flux inversion") with a contact
  * time tied to the oscillation period, and bounds every impulse by the surface
  * tension energy the topological event can release (sigma * |dA|).
  */
