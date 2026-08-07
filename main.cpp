@@ -127,11 +127,12 @@ int main(int argc, char* argv[])
         //   --transient-periods N: attenuate start forcing for oscillators lasting fewer than N periods
         //   --transient-gain G: forcing multiplier for transient oscillators (default 1 = unchanged)
         //   --forcing-cutoff SEC: max forcing duration for start impulses (default 0.0006)
-        //   --forcing-envelope hard|smoothstep: start impulse envelope (default hard)
+        //   --forcing-envelope hard|smoothstep: start impulse envelope (default smoothstep)
         //   --dense-events: insert each per-sample-line solveTime into the integrator
         //                   event-time set so K=w0^2 is sampled at every trackedBubInfo
         //                   row (instead of a linear ramp between only the first and
-        //                   last solve column over each oscillator's lifetime). Default off.
+        //                   last solve column over each oscillator's lifetime). Default ON;
+        //                   pass --no-dense-events for the legacy linear-ramp behavior.
         //   --damping-coeff C: multiplier on the per-sample beta computed by
         //                   Oscillator::calcBeta. Default 1.0 (Czerski/Deane). Use C<1
         //                   to lengthen ringdown (longer audible ring), C>1 to shorten it.
@@ -144,7 +145,7 @@ int main(int argc, char* argv[])
         //                   overridden via --listener-epsilon. Default off (no attenuation).
         //   --listener-epsilon E: lower clamp on d used by --listener-position to avoid
         //                   division blow-ups when a bubble sits exactly on the listener.
-        std::string bubFile("../Scenes/GlassPour/trackedBubInfo.txt");
+        std::string bubFile("../Scenes/GlassPour2016/trackedBubInfo.txt");
         std::string filteredFile;
         std::string outputFile("output.txt");
         int samplerate = 48000;
@@ -156,7 +157,7 @@ int main(int argc, char* argv[])
         double transientGain = 1.;
         double forcingCutoff = 0.0006;
         FluidSound::ForcingEnvelope forcingEnvelope = FluidSound::ForcingEnvelope::SMOOTHSTEP;
-        bool denseEvents = false;
+        bool denseEvents = true;
         double dampingCoeff = 1.0;
         bool applyListenerAttenuation = false;
         double listenerX = 0., listenerY = 0., listenerZ = 0.;

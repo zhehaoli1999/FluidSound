@@ -6,6 +6,34 @@ Bubble-based water sound synthesis code based on the papers:
 
 > [Toward Animating Water with Complex Acoustic Bubbles](https://www.cs.cornell.edu/projects/Sound/bubbles/). Timothy R. Langlois, Changxi Zheng, Doug L. James. *ACM Transactions on Graphics (SIGGRAPH North America 2016)*. 
 
+## Quick start: trackedBubInfo.txt → audio in one command
+
+With `runFluidSound` built (see below), `generate_wav_from_trackedBubInfo.py` renders a
+tracked-bubble file straight to a peak-normalized WAV **next to the input**, and can
+optionally mux the audio onto a video. Two ready-to-run LBM scenes ship in `Scenes/`
+(`Fruits` and `Exhale`: cleaned event graph, NN-predicted per-sample frequencies,
+frequency x2 with matched radius /2). From this folder:
+
+    # fruit splash -> Scenes/Fruits/trackedBubInfo_NN_fruit.{wav,mp4}
+    python generate_wav_from_trackedBubInfo.py Scenes/Fruits/trackedBubInfo_NN_fruit.txt --video Scenes/Fruits/preview_3d_fruit_silent.mp4 --damping-coeff 0.8
+
+    # underwater exhale -> Scenes/Exhale/trackedBubInfo_NN_exhale.{wav,mp4}
+    python generate_wav_from_trackedBubInfo.py Scenes/Exhale/trackedBubInfo_NN_exhale.txt --video Scenes/Exhale/preview_3d_exhale_silent.mp4 --damping-coeff 0.8
+
+Each scene also has a `trackedBubInfo_Minnaert_<scene>.txt` with the identical bubble
+record and event graph but Minnaert frequencies — swap it in to A/B the frequency model.
+`Scenes/GlassPour2016/` holds the WaveBlender reference pour from the papers.
+Common knobs (defaults: scheme 0, 48 kHz, cutoff 10 ms, smoothstep, damping 1.0):
+
+    python generate_wav_from_trackedBubInfo.py Scenes/Fruits/trackedBubInfo_NN_fruit.txt --scheme 1 --damping-coeff 0.7
+
+The runFluidSound binary is auto-discovered (superproject `build/Release/`, an in-module
+build, then PATH; `--exe` overrides), and `--video` finds ffmpeg via the imageio-ffmpeg
+package or PATH (`--ffmpeg` overrides). Only numpy is required for the WAV itself. The
+input must be reader-conformant (no `#` comment lines, resolvable Start/End references,
+merge → 1 target, split → 2 children); frequency/radius scaling should be baked in
+beforehand — see the full option list under *Command-line arguments* below.
+
 ## Build Instructions
 
 **Dependencies:** C++11, Eigen 3.4
@@ -17,9 +45,9 @@ Building is handled by CMake. For example, to build from source on Mac & Linux:
     mkdir build && cd build && cmake -DCMAKE_BUILD_TYPE=Release ..
     make -j4
 
-We provide an example scene in Scenes/GlassPour/. To run the code:
+We provide an example scene in Scenes/GlassPour2016/. To run the code:
 
-    ./runFluidSound ../Scenes/GlassPour/trackedBubInfo.txt 48000 1
+    ./runFluidSound ../Scenes/GlassPour2016/trackedBubInfo.txt 48000 1
     python ../scripts/write_wav.py output.txt 48000
 
 With importance filtering (full graph + filtered subset for output):
@@ -31,6 +59,41 @@ Optional `-o`/`--output` sets the waveform output file (default: output.txt).
 The full file provides the complete merge/split graph; the filtered file lists which bubbles contribute to the final sound. Bubbles not in the filtered set still participate in coupling but their contribution is excluded from the output. 
 
 (where the 1 indicates the scheme: 0 - uncoupled, 1 - coupled). Afterwards, the simulated audio will be written to 'output.wav'. More scenes are available [here](https://graphics.stanford.edu/papers/waveblender/dataset/index.html).
+
+## Command-line arguments
+
+```
+runFluidSound <bubFile> [filteredFile] <samplerate> <scheme> [options]
+```
+
+Positional arguments:
+
+| Argument | Default | Description |
+|---|---|---|
+| `bubFile` | `../Scenes/GlassPour2016/trackedBubInfo.txt` | Full bubble graph (WaveBlender `trackedBubInfo` format; required for merge/split references). |
+| `filteredFile` | *(none)* | Optional importance-filtered subset: only these bubbles contribute to the output, but all bubbles in `bubFile` still participate in coupling. |
+| `samplerate` | `48000` | Audio sample rate in Hz. |
+| `scheme` | `1` | `0` = uncoupled oscillators, `1` = coupled. |
+
+Options:
+
+| Option | Default | Description |
+|---|---|---|
+| `-o`, `--output FILE` | `output.txt` | Waveform output file (one sample per line; convert with `scripts/write_wav.py`). |
+| `--max-time SEC` | off | If > 0, stop the integration at this time and write a partial waveform. |
+| `--time-jitter W` | `0` | Shift each oscillator by U(−W, W) seconds to desynchronize grid clicks. |
+| `--time-jitter-seed N` | `random_device` | RNG seed for `--time-jitter`. |
+| `--transient-periods N` | `0` | Attenuate start forcing for oscillators lasting fewer than N periods. |
+| `--transient-gain G` | `1` | Forcing multiplier applied to those transient oscillators. |
+| `--forcing-cutoff SEC` | `0.0006` | Maximum duration of a start-forcing impulse. |
+| `--forcing-envelope hard\|smoothstep` | `smoothstep` | Start impulse envelope shape. |
+| `--dense-events` | **on** | Insert every per-sample-line solveTime into the integrator's event-time set, so K = ω₀² follows the trackedBubInfo frequency column at every row instead of a linear ramp from an oscillator's first to last sample. |
+| `--no-dense-events` | — | Restore the legacy linear-ramp behavior. |
+| `--damping-coeff C` | `1.0` | Multiplier on the per-sample β from `Oscillator::calcBeta` (unmodified Czerski/Deane radiative+viscous+thermal damping at 1.0). C < 1 lengthens the ringdown, C > 1 shortens it. |
+| `--listener-position X Y Z` | off | Enable per-oscillator 1/distance attenuation, applied after integration (coupled dynamics untouched). Coordinates live in the bubble-position space of the input file. |
+| `--listener-epsilon E` | `1e-6` | Lower clamp on the listener distance to avoid division blow-ups. |
+
+All options also accept `snake_case` spellings (e.g. `--dense_events`).
 
 ### Miscellaneous
 

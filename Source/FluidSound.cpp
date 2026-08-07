@@ -264,19 +264,11 @@ void Solver<T>::_makeOscillators(const std::map<int, Bubble<T>> &bubMap, double 
 
             if (curBub->startType == EventType::SPLIT)
             {
-                // Tracker glitches in the LBM exhale dataset frequently produce
-                // microscopic-parent -> macroscopic-child SPLIT events (e.g. a 20um
-                // ghost bubble "splits" into a 10mm child). The original guard
-                // `parent.radius >= child.radius` enforced mass-conservation and
-                // therefore zeroed forcing on these glitches, which silenced the
-                // child entirely. We now treat every SPLIT child as a freshly
-                // entrained bubble and force it via CzerskiJetForcing regardless
-                // of the parent's recorded radius.
-                //int parentBubID = curBub->prevBubIDs.at(0);
-                //if (bubMap.at(parentBubID).radius >= curBub->radius)
-                //{
+                int parentBubID = curBub->prevBubIDs.at(0);
+                if (bubMap.at(parentBubID).radius >= curBub->radius)
+                {
                     force = Oscillator<T>::CzerskiJetForcing(curBub->radius, T(forcingCutoff));
-                //}
+                }
             }
             else if (curBub->startType == EventType::MERGE)  // TODO: cleanup this code
             {
