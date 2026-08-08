@@ -27,6 +27,35 @@ Common knobs (defaults: scheme 0, 48 kHz, cutoff 10 ms, smoothstep, damping 1.0)
 
     python generate_wav_from_trackedBubInfo.py Scenes/Fruits/trackedBubInfo_NN_fruit.txt --scheme 1 --damping-coeff 0.7
 
+## Quick start: separating N, S, M audio
+
+`--forcing-types` renders per-event-type stems: only the listed bubble start-event
+types (N = entrainment, S = split, M = merge) receive forcing impulses; all other
+solver state (oscillator set, chaining, frequencies, damping, merge-forcing RNG
+stream) is unchanged, so the three stems **sum sample-exactly to the full mix**:
+
+    python generate_wav_from_trackedBubInfo.py Scenes/Fruits/trackedBubInfo_NN_fruit.txt --damping-coeff 0.8 --forcing-types N
+    python generate_wav_from_trackedBubInfo.py Scenes/Fruits/trackedBubInfo_NN_fruit.txt --damping-coeff 0.8 --forcing-types S
+    python generate_wav_from_trackedBubInfo.py Scenes/Fruits/trackedBubInfo_NN_fruit.txt --damping-coeff 0.8 --forcing-types M
+
+(Each run overwrites `<stem>.wav` next to the input — pass `-o`-style separation by
+copying the tracked file or moving the outputs between runs. Note each WAV is
+peak-normalized individually; for loudness-true comparison rescale the stems by the
+full mix's raw peak.)
+
+`--event-log events.csv` additionally writes one row per forcing event with the
+solver-measured per-impulse response:
+
+    python generate_wav_from_trackedBubInfo.py Scenes/Fruits/trackedBubInfo_NN_fruit.txt --damping-coeff 0.8 --event-log Scenes/Fruits/events.csv
+
+Columns: `t_event,osc_idx,bub_id,event_type,radius,cutoff_tau,weight,peak_accel` —
+`weight`/`cutoff_tau` are the impulse parameters (0 weight = silenced by the split
+mass guard, the merge two-parent condition, or `--forcing-types`), and `peak_accel`
+is the maximum |v''| the integrator itself recorded while that impulse was the
+oscillator's active one (exact from-rest birth response for a chain's first event;
+includes inherited ringing for later chain links). The log is written after
+synthesis completes.
+
 The runFluidSound binary is auto-discovered (superproject `build/Release/`, an in-module
 build, then PATH; `--exe` overrides), and `--video` finds ffmpeg via the imageio-ffmpeg
 package or PATH (`--ffmpeg` overrides). Only numpy is required for the WAV itself. The
@@ -90,6 +119,8 @@ Options:
 | `--dense-events` | **on** | Insert every per-sample-line solveTime into the integrator's event-time set, so K = ω₀² follows the trackedBubInfo frequency column at every row instead of a linear ramp from an oscillator's first to last sample. |
 | `--no-dense-events` | — | Restore the legacy linear-ramp behavior. |
 | `--damping-coeff C` | `1.0` | Multiplier on the per-sample β from `Oscillator::calcBeta` (unmodified Czerski/Deane radiative+viscous+thermal damping at 1.0). C < 1 lengthens the ringdown, C > 1 shortens it. |
+| `--forcing-types STR` | `NSM` | Subset of `NSM`: only these bubble start-event types receive forcing impulses (N = entrain, S = split, M = merge). Impulses are zeroed after the forcing RNG draw, so stems rendered with `N` / `S` / `M` separately sum sample-exactly to the full `NSM` render. |
+| `--event-log PATH` | off | Write a per-forcing-event CSV (`t_event,osc_idx,bub_id,event_type,radius,cutoff_tau,weight`) in final post-jitter/clip form; gated or guard-zeroed events appear with weight 0. |
 | `--listener-position X Y Z` | off | Enable per-oscillator 1/distance attenuation, applied after integration (coupled dynamics untouched). Coordinates live in the bubble-position space of the input file. |
 | `--listener-epsilon E` | `1e-6` | Lower clamp on the listener distance to avoid division blow-ups. |
 

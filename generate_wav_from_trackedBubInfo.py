@@ -133,6 +133,11 @@ def main() -> int:
     ap.add_argument("--damping-coeff", type=float, default=1.0)
     ap.add_argument("--no-dense-events", action="store_true",
                     help="legacy linear frequency ramp per oscillator (dense events are on by default)")
+    ap.add_argument("--forcing-types", default=None, metavar="NSM",
+                    help="subset of NSM: only these start-event types receive forcing "
+                         "(per-type stems sum sample-exactly to the full render)")
+    ap.add_argument("--event-log", type=Path, default=None,
+                    help="write the per-forcing-event CSV to this path")
     ap.add_argument("--max-time", type=float, default=None,
                     help="stop the integration at this time (seconds)")
     ap.add_argument("--video", type=Path, default=None,
@@ -160,6 +165,10 @@ def main() -> int:
            "--damping-coeff", str(args.damping_coeff)]
     if args.no_dense_events:
         cmd.append("--no-dense-events")
+    if args.forcing_types is not None:
+        cmd.extend(["--forcing-types", args.forcing_types])
+    if args.event_log is not None:
+        cmd.extend(["--event-log", str(args.event_log)])
     if args.max_time is not None:
         cmd.extend(["--max-time", str(args.max_time)])
 

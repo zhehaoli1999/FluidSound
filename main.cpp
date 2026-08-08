@@ -24,6 +24,8 @@ void Run(const std::string& bubFile, const std::string& filteredFile, const std:
     double transientPeriods = 0., double transientGain = 1., double forcingCutoff = 0.0006,
     FluidSound::ForcingEnvelope forcingEnvelope = FluidSound::ForcingEnvelope::SMOOTHSTEP,
     bool denseEvents = false, double dampingCoeff = 1.0,
+    unsigned forcingTypeMask = 0x7u, const std::string& forcingTypesStr = "NSM",
+    const std::string& eventLogPath = std::string(),
     bool applyListenerAttenuation = false,
     double listenerX = 0., double listenerY = 0., double listenerZ = 0., double listenerEpsilon = 1e-6)
 {
@@ -41,6 +43,10 @@ void Run(const std::string& bubFile, const std::string& filteredFile, const std:
     std::cout << " forcing_envelope=" << (forcingEnvelope == FluidSound::ForcingEnvelope::SMOOTHSTEP ? "smoothstep" : "hard");
     std::cout << " dense_events=" << (denseEvents ? "on" : "off");
     std::cout << " damping_coeff=" << dampingCoeff;
+    if (forcingTypeMask != 0x7u)
+        std::cout << " forcing_types=" << forcingTypesStr;
+    if (!eventLogPath.empty())
+        std::cout << " event_log=\"" << eventLogPath << "\"";
     if (applyListenerAttenuation)
     {
         std::cout << " listener_pos=(" << listenerX << ", " << listenerY << ", " << listenerZ << ")"
@@ -72,6 +78,7 @@ void Run(const std::string& bubFile, const std::string& filteredFile, const std:
     double dt = 1. / srate;
     FluidSound::Solver<precision> solver(bubFile, filteredFile, dt, scheme, 0., timeJitterHalfWidth, timeJitterSeed,
         transientPeriods, transientGain, forcingCutoff, forcingEnvelope, denseEvents, dampingCoeff,
+        forcingTypeMask, eventLogPath,
         applyListenerAttenuation, listenerX, listenerY, listenerZ, listenerEpsilon);
 
     const auto& evTimes = solver.eventTimes();
@@ -107,6 +114,7 @@ void Run(const std::string& bubFile, const std::string& filteredFile, const std:
         if (tdx % 9600 == 0) std::cout << "At time t = " << t << std::endl;
     }
     solver.printTimings();
+    solver.writeEventLog();
     std::cout << "Done. Output written to " << outputFile << std::endl;
 }
 
@@ -136,6 +144,15 @@ int main(int argc, char* argv[])
         //   --damping-coeff C: multiplier on the per-sample beta computed by
         //                   Oscillator::calcBeta. Default 1.0 (Czerski/Deane). Use C<1
         //                   to lengthen ringdown (longer audible ring), C>1 to shorten it.
+        //   --forcing-types STR: subset of "NSM" -- only these bubble start-event types
+        //                   receive forcing impulses (N=entrain, S=split, M=merge);
+        //                   others are zeroed AFTER the forcing RNG draw, so per-type
+        //                   stems rendered with N / S / M sum sample-exactly to the
+        //                   full NSM render. Default NSM (everything forced).
+        //   --event-log PATH: write a per-forcing-event CSV
+        //                   (t_event,osc_idx,bub_id,event_type,radius,cutoff_tau,weight)
+        //                   in final post-jitter/clip form; gated events appear with
+        //                   weight 0. Default off.
         //   --listener-position X Y Z: enable per-oscillator 1/distance-to-listener
         //                   attenuation on the audio sum. The listener sits at (X, Y, Z)
         //                   in the same coordinate space as the bubble positions in the
@@ -159,6 +176,9 @@ int main(int argc, char* argv[])
         FluidSound::ForcingEnvelope forcingEnvelope = FluidSound::ForcingEnvelope::SMOOTHSTEP;
         bool denseEvents = true;
         double dampingCoeff = 1.0;
+        unsigned forcingTypeMask = 0x7u;
+        std::string forcingTypesStr = "NSM";
+        std::string eventLogPath;
         bool applyListenerAttenuation = false;
         double listenerX = 0., listenerY = 0., listenerZ = 0.;
         double listenerEpsilon = 1e-6;
@@ -217,6 +237,30 @@ int main(int argc, char* argv[])
             {
                 if (i + 1 < argc) { dampingCoeff = std::atof(argv[++i]); }
             }
+            else if (arg == "--forcing-types" || arg == "--forcing_types")
+            {
+                if (i + 1 < argc)
+                {
+                    forcingTypesStr = std::string(argv[++i]);
+                    forcingTypeMask = 0u;
+                    for (char c : forcingTypesStr)
+                    {
+                        switch (c)
+                        {
+                            case 'N': case 'n': forcingTypeMask |= (1u << FluidSound::EventType::ENTRAIN); break;
+                            case 'M': case 'm': forcingTypeMask |= (1u << FluidSound::EventType::MERGE); break;
+                            case 'S': case 's': forcingTypeMask |= (1u << FluidSound::EventType::SPLIT); break;
+                            default: throw std::runtime_error(std::string("Invalid --forcing-types (subset of NSM): ") + forcingTypesStr);
+                        }
+                    }
+                    if (forcingTypeMask == 0u)
+                        throw std::runtime_error("--forcing-types must enable at least one of N, S, M");
+                }
+            }
+            else if (arg == "--event-log" || arg == "--event_log")
+            {
+                if (i + 1 < argc) { eventLogPath = std::string(argv[++i]); }
+            }
             else if (arg == "--listener-position" || arg == "--listener_position")
             {
                 if (i + 3 < argc)
@@ -260,6 +304,7 @@ int main(int argc, char* argv[])
 
         Run(bubFile, filteredFile, outputFile, samplerate, scheme, maxTime, timeJitterHalfWidth, timeJitterSeed,
             transientPeriods, transientGain, forcingCutoff, forcingEnvelope, denseEvents, dampingCoeff,
+            forcingTypeMask, forcingTypesStr, eventLogPath,
             applyListenerAttenuation, listenerX, listenerY, listenerZ, listenerEpsilon);
         return 0;
     }

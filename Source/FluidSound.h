@@ -60,6 +60,8 @@ public:
         ForcingEnvelope forcingEnvelope = ForcingEnvelope::HARD,
         bool denseEvents = false,
         double dampingCoeff = 1.0,
+        unsigned forcingTypeMask = 0x7u,
+        const std::string& eventLogPath = std::string(),
         bool applyListenerAttenuation = false,
         double listenerX = 0., double listenerY = 0., double listenerZ = 0.,
         double listenerEpsilon = 1e-6);
@@ -84,9 +86,13 @@ public:
         std::cout << "Solve time: " << _integrator->solve_time.count() << std::endl;
     }
 
+    /** \brief Write the --event-log CSV (with measured per-impulse peak |v''|); call after synthesis. */
+    void writeEventLog() const;
+
     ~Solver() { delete _integrator; }
 
 private:
+    std::string _eventLogPath;  //!< --event-log destination ("" = disabled)
     double _dt = 0.;    //!< timestep size
     double _ts = 0.;    //!< simulation start time
     int _step = 0;      //!< current time step
@@ -120,7 +126,8 @@ private:
      * \param[in]  bubMap  map from Bubble IDs to Bubble objects
      */
     void _makeOscillators(const std::map<int, Bubble<T>>& bubMap, double timeJitterHalfWidth, unsigned long long timeJitterSeed,
-        double transientPeriods, double transientGain, double forcingCutoff, bool denseEvents, double dampingCoeff);
+        double transientPeriods, double transientGain, double forcingCutoff, bool denseEvents, double dampingCoeff,
+        unsigned forcingTypeMask, const std::string& eventLogPath);
 };
 
 } // namespace FluidSound

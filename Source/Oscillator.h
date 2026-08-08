@@ -150,8 +150,13 @@ struct Oscillator
      *  [ weight(0)    ... weight(F)    ]]
      *
      * All forcing functions have the form F(t) = (t < cutoff) * weight * t * t
-     *  (where t is relative to the force start time : t = time - forceTime) 
+     *  (where t is relative to the force start time : t = time - forceTime)
      */
+
+    std::vector<int> forceTypes;   //!< EventType of each forcing column (index-aligned with forceData and bubIDs)
+    std::vector<T> forceRadii;     //!< equilibrium radius of the bubble behind each forcing column
+    std::vector<T> forcePeakAccel; //!< measured max |v''| attributed to each forcing column (filled during synthesis)
+    int forceCursor = 0;           //!< index of the forcing column currently active during synthesis
 
     /** 
      * \brief Neck collapse forcing model from Czerksi/Deane [2008; 2010]

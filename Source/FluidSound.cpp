@@ -7,6 +7,7 @@
 #include "FluidSound.h"
 #include "BubbleUtils.h"
 
+#include <fstream>
 #include <iomanip>
 #include <limits>
 #include <random>
@@ -18,6 +19,7 @@ template <typename T>
 Solver<T>::Solver(const std::string &bubFile, const std::string &filteredFile, double dt, int scheme, double ts,
     double timeJitterHalfWidth, unsigned long long timeJitterSeed, double transientPeriods, double transientGain,
     double forcingCutoff, ForcingEnvelope forcingEnvelope, bool denseEvents, double dampingCoeff,
+    unsigned forcingTypeMask, const std::string& eventLogPath,
     bool applyListenerAttenuation, double listenerX, double listenerY, double listenerZ, double listenerEpsilon)
     : _dt(dt), _ts(ts),
       _applyListenerAttenuation(applyListenerAttenuation),
@@ -50,7 +52,8 @@ Solver<T>::Solver(const std::string &bubFile, const std::string &filteredFile, d
                   << " filtered out (" << std::fixed << std::setprecision(1) << pctFiltered << "%)" << std::endl;
     }
      
-    _makeOscillators(allBubbles, timeJitterHalfWidth, timeJitterSeed, transientPeriods, transientGain, forcingCutoff, denseEvents, dampingCoeff);
+    _makeOscillators(allBubbles, timeJitterHalfWidth, timeJitterSeed, transientPeriods, transientGain, forcingCutoff, denseEvents, dampingCoeff,
+        forcingTypeMask, eventLogPath);
     std::cout << "Total number of oscillators = " << _oscillators.size() << std::endl;
     std::cout << "Total number of event times = " << _eventTimes.size()
               << (denseEvents ? "  (dense: per-sample-line K=w0^2)" : "  (sparse: linear K=w0^2 ramp per oscillator lifetime)")
@@ -105,9 +108,14 @@ T Solver<T>::step()
     // Check if any events (e.g., Bubbles added or removed) will occurr during this timestep
     while (_evID < _eventTimes.size() && time >= _eventTimes[_evID])
     {
-        if (time < _eventTimes[_evID + 1])
+        // On the last event there is no _eventTimes[_evID + 1]: treat the interval as
+        //  open-ended (any finite span works; the interpolation only ever evaluates at
+        //  alpha = 0 there since the render loop stops at the final event time).
+        const bool hasNext = (_evID + 1 < _eventTimes.size());
+        if (!hasNext || time < _eventTimes[_evID + 1])
         {
-            double time1 = _eventTimes[_evID]; double time2 = _eventTimes[_evID + 1];
+            double time1 = _eventTimes[_evID];
+            double time2 = hasNext ? _eventTimes[_evID + 1] : (time1 + 1.0);
 
             // Check if any Oscillators have ended by time1. We uncouple them from the bubble cloud but
             //    continue timestepping their oscillations (until they die out) to avoid discontinuities.
@@ -179,6 +187,28 @@ T Solver<T>::step()
 
         total_osc[i]->accel = _integrator->Derivs()(i + N_total);
 
+        // Measure the raw per-impulse response: attribute this sample's |v''| to the
+        //  forcing column whose impulse is currently active (all samples between one
+        //  impulse's start and the next belong to it, including its ringdown). For an
+        //  oscillator's first column this is exactly the birth response from rest; for
+        //  later chain links it includes ringing inherited from earlier impulses.
+        {
+            Oscillator<T>* osc = total_osc[i];
+            const int nCols = static_cast<int>(osc->forceData.cols());
+            while (osc->forceCursor + 1 < nCols && time >= osc->forceData(0, osc->forceCursor + 1))
+            {
+                osc->forceCursor++;
+            }
+            if (osc->forceCursor < static_cast<int>(osc->forcePeakAccel.size()))
+            {
+                T a = std::abs(osc->accel);
+                if (a > osc->forcePeakAccel[osc->forceCursor])
+                {
+                    osc->forcePeakAccel[osc->forceCursor] = a;
+                }
+            }
+        }
+
         // Per-oscillator distance-to-listener attenuation. Applied AFTER integration
         //  so the coupled mass-matrix dynamics are untouched: only the contribution
         //  to the mixed audio sample is scaled by 1/d. The interpolated trackedBubInfo
@@ -217,10 +247,52 @@ T Solver<T>::step()
     return total_response;
 }
 
+/** One row per forcing column of every surviving oscillator, in final form (post
+ *  transient-gain, cutoff-clip and jitter; _oscillators sorted, so osc_idx is the
+ *  stable oscillator id). Gated / guard-zeroed events appear with weight 0. The
+ *  peak_accel column is the max |v''| measured during synthesis while that impulse
+ *  was the active one (exact birth response for a chain's first column; includes
+ *  inherited ringing for later chain links). Call after the render loop. */
+template <typename T>
+void Solver<T>::writeEventLog() const
+{
+    if (_eventLogPath.empty()) { return; }
+    std::ofstream evlog(_eventLogPath);
+    if (!evlog.good())
+    {
+        std::cerr << "Warning: cannot open --event-log path \"" << _eventLogPath << "\"; skipping." << std::endl;
+        return;
+    }
+    evlog << "t_event,osc_idx,bub_id,event_type,radius,cutoff_tau,weight,peak_accel\n";
+    long long rows = 0;
+    for (size_t o = 0; o < _oscillators.size(); ++o)
+    {
+        const Oscillator<T>& osc = _oscillators[o];
+        for (int k = 0; k < osc.forceData.cols(); ++k)
+        {
+            char typeChar = '?';
+            switch (static_cast<EventType>(osc.forceTypes[k]))
+            {
+                case EventType::ENTRAIN: typeChar = 'N'; break;
+                case EventType::MERGE:   typeChar = 'M'; break;
+                case EventType::SPLIT:   typeChar = 'S'; break;
+                default: break;
+            }
+            evlog << std::setprecision(9) << osc.forceData(0, k) << ',' << o << ',' << osc.bubIDs[k] << ','
+                  << typeChar << ',' << osc.forceRadii[k] << ',' << osc.forceData(1, k) << ','
+                  << osc.forceData(2, k) << ',' << osc.forcePeakAccel[k] << '\n';
+            ++rows;
+        }
+    }
+    std::cout << "Event log: " << rows << " forcing events (with measured peak_accel) -> "
+              << _eventLogPath << std::endl;
+}
+
 /** */
 template <typename T>
 void Solver<T>::_makeOscillators(const std::map<int, Bubble<T>> &bubMap, double timeJitterHalfWidth, unsigned long long timeJitterSeed,
-    double transientPeriods, double transientGain, double forcingCutoff, bool denseEvents, double dampingCoeff)
+    double transientPeriods, double transientGain, double forcingCutoff, bool denseEvents, double dampingCoeff,
+    unsigned forcingTypeMask, const std::string& eventLogPath)
 {
     _oscillators.clear();
 
@@ -243,6 +315,8 @@ void Solver<T>::_makeOscillators(const std::map<int, Bubble<T>> &bubMap, double 
         std::vector<T> s_radii, s_w0, s_x, s_y, s_z;
         std::vector<T> Cvals;   // precomputed damping coefficient
         std::vector<T> forceTimes, f_cutoffs, f_weights;
+        std::vector<int> f_types;
+        std::vector<T> f_radii;
 
         while (true)
         {
@@ -317,9 +391,18 @@ void Solver<T>::_makeOscillators(const std::map<int, Bubble<T>> &bubMap, double 
             {
                 force = Oscillator<T>::CzerskiJetForcing(curBub->radius, T(forcingCutoff));
             }
+            // Event-type gating (--forcing-types): zero the impulse AFTER the forcing
+            //  call so the MergeForcing RNG stream stays identical across gated renders
+            //  -- that makes the N/S/M stems sum sample-exactly to the full mix.
+            if (!((forcingTypeMask >> static_cast<int>(curBub->startType)) & 1u))
+            {
+                force = std::pair<T, T>(T(0), T(0));
+            }
             forceTimes.push_back(curBub->startTime);
             f_cutoffs.push_back(force.first);
             f_weights.push_back(force.second);
+            f_types.push_back(static_cast<int>(curBub->startType));
+            f_radii.push_back(curBub->radius);
 
 
             // ----- Handle bubble end event: chaining logic -----
@@ -422,6 +505,9 @@ void Solver<T>::_makeOscillators(const std::map<int, Bubble<T>> &bubMap, double 
         osc.forceData.row(0) = Eigen::Map<Eigen::VectorX<T>>(forceTimes.data(), forceTimes.size());
         osc.forceData.row(1) = Eigen::Map<Eigen::VectorX<T>>(f_cutoffs.data(), f_cutoffs.size());
         osc.forceData.row(2) = Eigen::Map<Eigen::VectorX<T>>(f_weights.data(), f_weights.size());
+        osc.forceTypes = f_types;
+        osc.forceRadii = f_radii;
+        osc.forcePeakAccel.assign(f_types.size(), T(0));
 
 
         // Finally, add this Oscillator
@@ -472,6 +558,11 @@ void Solver<T>::_makeOscillators(const std::map<int, Bubble<T>> &bubMap, double 
         }
     }
     _eventTimes.assign(eventTimesSet.begin(), eventTimesSet.end());
+
+    // Per-forcing-event ledger (--event-log): the path is remembered here; the CSV is
+    //  written by writeEventLog() AFTER synthesis, so it can include the measured
+    //  per-impulse peak |v''| (forcePeakAccel) alongside the forcing parameters.
+    _eventLogPath = eventLogPath;
 
     if (transientPeriods > 0. && transientGain < 1.)
     {
