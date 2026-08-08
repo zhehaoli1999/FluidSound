@@ -11,8 +11,7 @@ Bubble-based water sound synthesis code based on the papers:
 With `runFluidSound` built (see below), `generate_wav_from_trackedBubInfo.py` renders a
 tracked-bubble file straight to a peak-normalized WAV **next to the input**, and can
 optionally mux the audio onto a video. Two ready-to-run LBM scenes ship in `Scenes/`
-(`Fruits` and `Exhale`: cleaned event graph, NN-predicted per-sample frequencies,
-frequency x2 with matched radius /2). From this folder:
+(`Fruits` and `Exhale`: cleaned event graph, NN-predicted per-sample frequencies. Then the frequency is scaled by 2×, with the corresponding radius reduced by half based on the raw LBM simulation outputs). From this folder:
 
     # fruit splash -> Scenes/Fruits/trackedBubInfo_NN_fruit.{wav,mp4}
     python generate_wav_from_trackedBubInfo.py Scenes/Fruits/trackedBubInfo_NN_fruit.txt --video Scenes/Fruits/preview_3d_fruit_silent.mp4 --damping-coeff 0.8
@@ -21,11 +20,11 @@ frequency x2 with matched radius /2). From this folder:
     python generate_wav_from_trackedBubInfo.py Scenes/Exhale/trackedBubInfo_NN_exhale.txt --video Scenes/Exhale/preview_3d_exhale_silent.mp4 --damping-coeff 0.8
 
 Each scene also has a `trackedBubInfo_Minnaert_<scene>.txt` with the identical bubble
-record and event graph but Minnaert frequencies — swap it in to A/B the frequency model.
+record and event graph but Minnaert frequencies and same 2x scaling — swap it in to A/B the frequency model.
 `Scenes/GlassPour2016/` holds the WaveBlender reference pour from the papers.
 Common knobs (defaults: scheme 0, 48 kHz, cutoff 10 ms, smoothstep, damping 1.0):
 
-    python generate_wav_from_trackedBubInfo.py Scenes/Fruits/trackedBubInfo_NN_fruit.txt --scheme 1 --damping-coeff 0.7
+    python generate_wav_from_trackedBubInfo.py {path_to_trackedBubInfo.txt}
 
 ## Quick start: separating N, S, M audio
 
